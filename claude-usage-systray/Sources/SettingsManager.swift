@@ -75,6 +75,13 @@ final class SettingsManager: ObservableObject {
         accounts[index].name = name.isEmpty ? account.name : name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    func moveAccount(_ account: ClaudeAccount, by offset: Int) {
+        guard let index = accounts.firstIndex(of: account) else { return }
+        let destination = index + offset
+        guard accounts.indices.contains(destination) else { return }
+        accounts.swapAt(index, destination)
+    }
+
     func setWarningThreshold(_ value: Double) { settings.warningThreshold = value }
     func setCriticalThreshold(_ value: Double) { settings.criticalThreshold = value }
     func setNotificationsEnabled(_ enabled: Bool) { settings.notificationsEnabled = enabled }

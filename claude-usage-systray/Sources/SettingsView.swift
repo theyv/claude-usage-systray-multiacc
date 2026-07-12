@@ -7,6 +7,8 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showAddAccount = false
     @State private var showClaudeCodeLogin = false
+    @State private var accountToRename: ClaudeAccount?
+    @State private var renamedAccountName = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,6 +27,14 @@ struct SettingsView: View {
                                     .font(.caption).foregroundColor(.secondary)
                             }
                             Spacer()
+                            Button { beginRename(account) } label: { Image(systemName: "pencil") }
+                                .buttonStyle(.borderless)
+                            Button { move(account, by: -1) } label: { Image(systemName: "chevron.up") }
+                                .buttonStyle(.borderless)
+                                .disabled(settingsManager.accounts.first?.id == account.id)
+                            Button { move(account, by: 1) } label: { Image(systemName: "chevron.down") }
+                                .buttonStyle(.borderless)
+                                .disabled(settingsManager.accounts.last?.id == account.id)
                             Button(role: .destructive) { settingsManager.removeAccount(account); usageService.fetchUsage(accounts: settingsManager.accounts) } label: { Image(systemName: "trash") }
                                 .buttonStyle(.borderless)
                         }
@@ -45,11 +55,34 @@ struct SettingsView: View {
         .frame(width: 420, height: 440)
         .sheet(isPresented: $showAddAccount) { AddAccountView(settingsManager: settingsManager, usageService: usageService) }
         .sheet(isPresented: $showClaudeCodeLogin) { ClaudeCodeLoginView(settingsManager: settingsManager, usageService: usageService) }
+        .alert("Rename account", isPresented: Binding(
+            get: { accountToRename != nil },
+            set: { if !$0 { accountToRename = nil } }
+        )) {
+            TextField("Account name", text: $renamedAccountName)
+            Button("Cancel", role: .cancel) { accountToRename = nil }
+            Button("Save") { saveRename() }
+        }
     }
 
     private func accountSource(_ account: ClaudeAccount) -> String {
         guard let path = account.ccsCredentialsPath else { return "Stored in Keychain" }
         return path.contains("/.ccs/") ? "CCS profile" : "Claude Code login"
+    }
+
+    private func move(_ account: ClaudeAccount, by offset: Int) {
+        settingsManager.moveAccount(account, by: offset)
+        usageService.fetchUsage(accounts: settingsManager.accounts)
+    }
+
+    private func beginRename(_ account: ClaudeAccount) {
+        renamedAccountName = account.name
+        accountToRename = account
+    }
+
+    private func saveRename() {
+        if let accountToRename { settingsManager.renameAccount(accountToRename, to: renamedAccountName) }
+        accountToRename = nil
     }
 }
 

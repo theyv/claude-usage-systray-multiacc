@@ -188,7 +188,7 @@ final class UsageService: ObservableObject {
                 try? await Task.sleep(nanoseconds: 350_000_000)
             }
             await MainActor.run {
-                self.accountUsages = results.sorted { $0.account.name.localizedStandardCompare($1.account.name) == .orderedAscending }
+                self.accountUsages = results
                 if rateLimited { self.retryAfter = Date().addingTimeInterval(self.rateLimitInterval) }
                 self.isLoading = false
             }
