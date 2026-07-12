@@ -1,176 +1,145 @@
 import Foundation
 import Security
 
-// MARK: - OAuth Keychain
+private let accountTokenService = "Claude Usage Systray OAuth"
 
-private struct KeychainCredentials: Decodable {
-    let claudeAiOauth: OAuthData
-
-    struct OAuthData: Decodable {
-        let accessToken: String
-        let expiresAt: Double
-    }
-}
-
-func readOAuthAccessToken() throws -> String {
-    var result: AnyObject?
+func saveAccountToken(_ token: String, for accountID: UUID) throws {
     let query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
-        kSecAttrService as String: "Claude Code-credentials",
+        kSecAttrService as String: accountTokenService,
+        kSecAttrAccount as String: accountID.uuidString
+    ]
+    SecItemDelete(query as CFDictionary)
+    var item = query
+    item[kSecValueData as String] = Data(token.utf8)
+    let status = SecItemAdd(item as CFDictionary, nil)
+    guard status == errSecSuccess else { throw KeychainError(status) }
+}
+
+func readAccountToken(for accountID: UUID) throws -> String {
+    let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: accountTokenService,
+        kSecAttrAccount as String: accountID.uuidString,
         kSecReturnData as String: true,
         kSecMatchLimit as String: kSecMatchLimitOne
     ]
+    var result: AnyObject?
     let status = SecItemCopyMatching(query as CFDictionary, &result)
-    guard status == errSecSuccess, let data = result as? Data else {
-        throw NSError(domain: "Keychain", code: Int(status),
-                      userInfo: [NSLocalizedDescriptionKey: "Claude Code credentials not found in Keychain. Make sure Claude Code is installed and logged in. (status: \(status))"])
-    }
-    let creds = try JSONDecoder().decode(KeychainCredentials.self, from: data)
-    return creds.claudeAiOauth.accessToken
+    guard status == errSecSuccess, let data = result as? Data, let token = String(data: data, encoding: .utf8) else { throw KeychainError(status) }
+    return token
 }
 
-// MARK: - API Response Model
+private struct CCSCredentials: Decodable {
+    let claudeAiOauth: OAuth
+    struct OAuth: Decodable { let accessToken: String }
+}
+
+func readToken(for account: ClaudeAccount) throws -> String {
+    if let path = account.ccsCredentialsPath {
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        return try JSONDecoder().decode(CCSCredentials.self, from: data).claudeAiOauth.accessToken
+    }
+    return try readAccountToken(for: account.id)
+}
+
+func deleteAccountToken(for accountID: UUID) {
+    SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: accountTokenService, kSecAttrAccount as String: accountID.uuidString] as CFDictionary)
+}
+
+private struct KeychainError: LocalizedError {
+    let status: OSStatus
+    var errorDescription: String? { "Could not access the account token in Keychain (status \(status))." }
+}
 
 struct OAuthUsageResponse: Decodable {
-    let fiveHour: UsagePeriod?
-    let sevenDay: UsagePeriod?
-    let sevenDaySonnet: UsagePeriod?
+    let fiveHour: APIUsagePeriod?
+    let sevenDay: APIUsagePeriod?
+    let sevenDaySonnet: APIUsagePeriod?
+    let limits: [ScopedLimit]?
 
     enum CodingKeys: String, CodingKey {
-        case fiveHour = "five_hour"
-        case sevenDay = "seven_day"
-        case sevenDaySonnet = "seven_day_sonnet"
+        case fiveHour = "five_hour", sevenDay = "seven_day", sevenDaySonnet = "seven_day_sonnet", limits
     }
 
-    struct UsagePeriod: Decodable {
+    struct APIUsagePeriod: Decodable {
         let utilization: Double
         let resetsAt: String
+        enum CodingKeys: String, CodingKey { case utilization; case resetsAt = "resets_at" }
+        var asUsagePeriod: UsagePeriod { UsagePeriod(utilization: Int(utilization), resetsAt: parseISO8601(resetsAt)) }
+        var resetsAtDate: Date? { parseISO8601(resetsAt) }
+    }
 
-        enum CodingKeys: String, CodingKey {
-            case utilization
-            case resetsAt = "resets_at"
-        }
+    struct ScopedLimit: Decodable {
+        let kind: String?
+        let percent: Double?
+        let resetsAt: String?
+        let scope: Scope?
+        enum CodingKeys: String, CodingKey { case kind, percent, scope; case resetsAt = "resets_at" }
+        struct Scope: Decodable { let model: Model?; struct Model: Decodable { let displayName: String?; enum CodingKeys: String, CodingKey { case displayName = "display_name" } } }
+    }
 
-        var resetsAtDate: Date? {
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            return formatter.date(from: resetsAt)
-        }
+    var fable: UsagePeriod? {
+        guard let limit = limits?.first(where: { $0.kind == "weekly_scoped" && $0.scope?.model?.displayName?.localizedCaseInsensitiveContains("fable") == true }), let percent = limit.percent else { return nil }
+        return UsagePeriod(utilization: Int(percent), resetsAt: limit.resetsAt.flatMap(parseISO8601))
     }
 }
 
-// MARK: - Utilization helpers (pure, testable)
-
-/// Returns utilization percentage (0–100) given token count and limit.
-func calculateUtilization(tokens: Int, limit: Int) -> Int {
-    guard limit > 0 else { return 0 }
-    return min(100, tokens * 100 / limit)
+private func parseISO8601(_ value: String) -> Date? {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
 }
-
-/// Formats a future date as a human-readable countdown string.
-func formatTimeRemaining(until date: Date, from now: Date = Date()) -> String {
-    let interval = date.timeIntervalSince(now)
-    if interval <= 0 { return "now" }
-    let hours = Int(interval) / 3600
-    let minutes = (Int(interval) % 3600) / 60
-    return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
-}
-
-// MARK: - UsageService
 
 final class UsageService: ObservableObject {
     static let shared = UsageService()
-
-    @Published private(set) var currentUsage: UsageSnapshot = .placeholder
-    @Published private(set) var error: String?
-    @Published private(set) var isLoading: Bool = false
-    @Published private(set) var weeklySessions: Int = 0
-    @Published private(set) var weeklyMessages: Int = 0
-    @Published private(set) var weeklyTokens: Int = 0
+    @Published private(set) var accountUsages: [AccountUsage] = []
+    @Published private(set) var isLoading = false
 
     private var refreshTimer: Timer?
-    private let normalInterval: TimeInterval = 5 * 60   // 5 minutes
-    private let backoffInterval: TimeInterval = 15 * 60 // 15 minutes after 429
-
-    // Injectable for testing
+    private let normalInterval: TimeInterval = 5 * 60
     var urlSession: URLSession = .shared
-
-    private var cachedToken: String?
-
     private init() {}
 
-    private func accessToken() throws -> String {
-        if let token = cachedToken { return token }
-        let token = try readOAuthAccessToken()
-        cachedToken = token
-        return token
+    var bestAccount: AccountUsage? {
+        accountUsages
+            .filter { $0.error == nil }
+            .max { $0.availableCapacity < $1.availableCapacity }
     }
 
-    func startPolling() {
-        fetchUsage()
-        scheduleTimer(interval: normalInterval)
-    }
+    func startPolling(accounts: [ClaudeAccount]) { fetchUsage(accounts: accounts); scheduleTimer() }
+    func stopPolling() { refreshTimer?.invalidate(); refreshTimer = nil }
 
-    func stopPolling() {
+    private func scheduleTimer() {
         refreshTimer?.invalidate()
-        refreshTimer = nil
-    }
-
-    private func scheduleTimer(interval: TimeInterval) {
-        refreshTimer?.invalidate()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
-            self?.fetchUsage()
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: normalInterval, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.fetchUsage(accounts: SettingsManager.shared.accounts)
         }
     }
 
-    func fetchUsage() {
-        DispatchQueue.main.async { self.isLoading = true }
-
+    func fetchUsage(accounts: [ClaudeAccount]) {
+        isLoading = true
         Task {
-            do {
-                let token = try accessToken()
-                let response = try await fetchOAuthUsage(accessToken: token)
-
-                let fiveHourUtil = Int(response.fiveHour?.utilization ?? 0)
-                let sevenDayUtil = Int(response.sevenDay?.utilization ?? 0)
-                let sonnetUtil: Int? = response.sevenDaySonnet.map { Int($0.utilization) }
-
-                let fiveHourReset = response.fiveHour?.resetsAtDate
-                let sevenDayReset = response.sevenDay?.resetsAtDate
-
-                let snapshot = UsageSnapshot(
-                    fiveHourUtilization: fiveHourUtil,
-                    sevenDayUtilization: sevenDayUtil,
-                    sevenDaySonnetUtilization: sonnetUtil,
-                    fiveHourResetIn: fiveHourReset.map { formatTimeRemaining(until: $0) },
-                    sevenDayResetIn: sevenDayReset.map { formatTimeRemaining(until: $0) },
-                    lastUpdated: Date(),
-                    weeklySessions: 0,
-                    weeklyMessages: 0,
-                    weeklyTokens: 0
-                )
-
-                await MainActor.run {
-                    self.currentUsage = snapshot
-                    self.error = nil
-                    self.isLoading = false
-                    self.scheduleTimer(interval: self.normalInterval)
-                }
-            } catch let error as NSError {
-                let isRateLimit = error.code == 429
-                await MainActor.run {
-                    if isRateLimit {
-                        // Clear token so next attempt re-reads a potentially refreshed token from Keychain
-                        self.cachedToken = nil
-                        self.error = "Rate limited — retrying in 15 min"
-                        self.scheduleTimer(interval: self.backoffInterval)
-                    } else {
-                        self.error = error.localizedDescription
-                        self.scheduleTimer(interval: self.normalInterval)
-                    }
-                    self.isLoading = false
-                }
+            let results = await withTaskGroup(of: AccountUsage.self, returning: [AccountUsage].self) { group in
+                for account in accounts { group.addTask { await self.fetchUsage(for: account) } }
+                var values: [AccountUsage] = []
+                for await value in group { values.append(value) }
+                return values
             }
+            await MainActor.run {
+                self.accountUsages = results.sorted { $0.account.name.localizedStandardCompare($1.account.name) == .orderedAscending }
+                self.isLoading = false
+            }
+        }
+    }
+
+    private func fetchUsage(for account: ClaudeAccount) async -> AccountUsage {
+        do {
+            let response = try await fetchOAuthUsage(accessToken: readToken(for: account))
+            return AccountUsage(account: account, snapshot: UsageSnapshot(fiveHour: response.fiveHour?.asUsagePeriod ?? UsageSnapshot.placeholder.fiveHour, sevenDay: response.sevenDay?.asUsagePeriod ?? UsageSnapshot.placeholder.sevenDay, fable: response.fable ?? response.sevenDaySonnet?.asUsagePeriod, lastUpdated: Date()), error: nil)
+        } catch {
+            return AccountUsage(account: account, snapshot: .placeholder, error: error.localizedDescription)
         }
     }
 
@@ -178,23 +147,8 @@ final class UsageService: ObservableObject {
         var request = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-
-        print("[UsageService] GET /api/oauth/usage")
-
         let (data, response) = try await urlSession.data(for: request)
-        let body = String(data: data, encoding: .utf8) ?? "<binary>"
-
-        guard let http = response as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
-        }
-
-        print("[UsageService] HTTP \(http.statusCode) — \(body.prefix(300))")
-
-        guard http.statusCode == 200 else {
-            throw NSError(domain: "OAuthUsage", code: http.statusCode,
-                          userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode): \(body)"])
-        }
-
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { throw URLError(.badServerResponse) }
         return try JSONDecoder().decode(OAuthUsageResponse.self, from: data)
     }
 }

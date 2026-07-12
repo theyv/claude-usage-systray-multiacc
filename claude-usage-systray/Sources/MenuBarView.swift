@@ -4,177 +4,88 @@ struct MenuBarView: View {
     @ObservedObject var usageService: UsageService
     @ObservedObject var settingsManager: SettingsManager
     @State private var showSettings = false
-    @State private var showDashboard = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            usageHeader
-            
-            Divider()
-                .padding(.vertical, 4)
+            if usageService.accountUsages.isEmpty && !usageService.isLoading {
+                Text("No Claude accounts configured")
+                    .foregroundColor(.secondary)
+                    .padding(12)
+            } else {
+                ForEach(usageService.accountUsages) { accountUsage in
+                    AccountUsageView(accountUsage: accountUsage, settings: settingsManager.settings)
+                    if accountUsage.id != usageService.accountUsages.last?.id { Divider().padding(.vertical, 6) }
+                }
+            }
 
-            modelBreakdown
-
-            Divider()
-                .padding(.vertical, 4)
-
-            actionButtons
-
-            Divider()
-                .padding(.vertical, 4)
-
-            quitButton
+            Divider().padding(.vertical, 6)
+            Button(action: refreshUsage) { Label("Refresh all accounts", systemImage: "arrow.clockwise") }
+                .buttonStyle(.plain).padding(.horizontal, 12).padding(.vertical, 5)
+            Button(action: { showSettings = true }) { Label("Accounts & settings", systemImage: "gear") }
+                .buttonStyle(.plain).padding(.horizontal, 12).padding(.vertical, 5)
+            Button(action: { NSApplication.shared.terminate(nil) }) { Label("Quit", systemImage: "power") }
+                .buttonStyle(.plain).padding(.horizontal, 12).padding(.vertical, 5)
         }
         .padding(.vertical, 8)
-        .frame(minWidth: 200)
-        .sheet(isPresented: $showSettings) {
-            SettingsView(settingsManager: settingsManager, usageService: usageService)
-        }
+        .frame(minWidth: 330)
+        .sheet(isPresented: $showSettings) { SettingsView(settingsManager: settingsManager, usageService: usageService) }
     }
 
-    private var usageHeader: some View {
+    private func refreshUsage() { usageService.fetchUsage(accounts: settingsManager.accounts) }
+}
+
+private struct AccountUsageView: View {
+    let accountUsage: AccountUsage
+    let settings: AppSettings
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Image(systemName: usageIconName)
-                    .foregroundColor(usageColor)
-                Text("5hr: \(usageService.currentUsage.fiveHourUtilization)%")
-                    .fontWeight(.medium)
+                Text(accountUsage.account.name).fontWeight(.semibold)
                 Spacer()
-                if let timeLeft = usageService.currentUsage.fiveHourResetIn {
-                    Text(timeLeft)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
+                Text("\(accountUsage.availableCapacity)% available")
+                    .font(.caption).foregroundColor(.secondary)
             }
-
-            HStack {
-                Image(systemName: "calendar")
-                    .foregroundColor(weeklyColor)
-                Text("Week: \(usageService.currentUsage.sevenDayUtilization)%")
-                    .fontWeight(.medium)
-                Spacer()
-                if let timeLeft = usageService.currentUsage.sevenDayResetIn {
-                    Text(timeLeft)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+            if let error = accountUsage.error {
+                Text(accountUsage.account.ccsCredentialsPath == nil ? error : "Not logged in to this CCS profile")
+                    .font(.caption).foregroundColor(.red)
+            } else {
+                LimitRow(label: "5h", period: accountUsage.snapshot.fiveHour, icon: "clock", settings: settings)
+                LimitRow(label: "Weekly", period: accountUsage.snapshot.sevenDay, icon: "calendar", settings: settings)
+                if let fable = accountUsage.snapshot.fable {
+                    LimitRow(label: "Fable", period: fable, icon: "sparkles", settings: settings)
                 }
-            }
-
-            if let error = usageService.error {
-                Text(error)
-                    .font(.caption)
-                    .foregroundColor(.red)
-                    .lineLimit(2)
-            } else if usageService.isLoading {
-                ProgressView()
-                    .scaleEffect(0.5)
-                    .frame(height: 10)
             }
         }
         .padding(.horizontal, 12)
     }
+}
 
-    private var modelBreakdown: some View {
-        Group {
-            if let sonnetUsage = usageService.currentUsage.sevenDaySonnetUtilization {
-                HStack {
-                    Image(systemName: "cpu")
-                        .font(.caption)
-                        .foregroundColor(.blue)
-                    Text("Sonnet: \(sonnetUsage)%")
-                        .font(.caption)
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 2)
-            }
-        }
-    }
+private struct LimitRow: View {
+    let label: String
+    let period: UsagePeriod
+    let icon: String
+    let settings: AppSettings
 
-    private var actionButtons: some View {
-        VStack(spacing: 0) {
-            Button(action: openDashboard) {
-                HStack {
-                    Image(systemName: "chart.bar")
-                    Text("Open Dashboard")
-                    Spacer()
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: icon).frame(width: 14).foregroundColor(color)
+            Text(label).frame(width: 48, alignment: .leading)
+            Text("\(period.utilization)% used").fontWeight(.medium)
+            Spacer()
+            if let reset = period.resetsAt {
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text("in \(formatTimeRemaining(until: reset))").font(.caption)
+                    Text(formatResetDate(reset)).font(.caption2).foregroundColor(.secondary)
                 }
             }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-
-            Button(action: refreshUsage) {
-                HStack {
-                    Image(systemName: "arrow.clockwise")
-                    Text("Refresh")
-                    Spacer()
-                }
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-
-            Button(action: { showSettings = true }) {
-                HStack {
-                    Image(systemName: "gear")
-                    Text("Settings")
-                    Spacer()
-                }
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
         }
+        .font(.caption)
     }
 
-    private var quitButton: some View {
-        Button(action: quitApp) {
-            HStack {
-                Image(systemName: "power")
-                Text("Quit")
-                Spacer()
-            }
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-    }
-
-    private var usageIconName: String {
-        let usage = usageService.currentUsage.fiveHourUtilization
-        if usage >= 80 { return "exclamationmark.triangle.fill" }
-        if usage >= 50 { return "chart.pie.fill" }
-        return "chart.pie"
-    }
-
-    private var usageColor: Color {
-        let usage = usageService.currentUsage.fiveHourUtilization
-        if usage >= 90 { return .red }
-        if usage >= 70 { return .orange }
-        return .primary
-    }
-
-    private var weeklyColor: Color {
-        let usage = usageService.currentUsage.sevenDayUtilization
-        let criticalThreshold = Int(settingsManager.settings.criticalThreshold)
-        let warningThreshold = Int(settingsManager.settings.warningThreshold)
-        if usage >= criticalThreshold { return .red }
-        if usage >= warningThreshold { return .orange }
-        return .primary
-    }
-
-    private func openDashboard() {
-        if let url = URL(string: "https://console.anthropic.com/settings/usage") {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
-    private func refreshUsage() {
-        usageService.fetchUsage()
-    }
-
-    private func quitApp() {
-        NSApplication.shared.terminate(nil)
+    private var color: Color {
+        if period.utilization >= Int(settings.criticalThreshold) { return .red }
+        if period.utilization >= Int(settings.warningThreshold) { return .orange }
+        return .accentColor
     }
 }

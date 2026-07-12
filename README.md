@@ -1,6 +1,6 @@
-# Claude Usage Systray
+# Claude Usage Systray — Multi-Account
 
-A lightweight macOS menu bar app that shows your [Claude.ai](https://claude.ai) plan usage in real time — current session and weekly limits — without opening a browser.
+A macOS menu bar app that monitors several [Claude.ai](https://claude.ai) accounts at once. It automatically puts the account with the most usable quota left in the menu bar, while the popover shows every account.
 
 ![Claude Usage Systray](claude-usage-systray/Resources/Assets.xcassets/Image.imageset/Image.png)
 
@@ -10,16 +10,24 @@ Mirrors the data on `claude.ai/settings/usage`:
 
 | Metric | Description |
 |--------|-------------|
-| **5h** | Current session usage (resets every ~5 hours) |
-| **7d** | Weekly all-models usage |
-| **Sonnet** | Weekly Sonnet-only usage (shown in popover) |
+| **5h** | Current session usage and the exact reset day/time |
+| **Weekly** | Weekly all-models usage and the exact reset day/time |
+| **Fable** | Weekly Fable limit when returned by the API |
+
+The menu-bar item selects the account with the highest remaining capacity (the lower of its remaining 5h and weekly quota). This means it naturally points to the account that is safest to use next.
+
+## Multi-account and CCS
+
+This fork understands [CCS](https://github.com/kaitranntt/ccs) account profiles. On launch it discovers profile directories in `~/.ccs/instances` and adds them by profile name. It reads a token only from that profile's `.credentials.json`; it does not copy CCS secrets into the app. A profile without a valid login is shown in the popover as needing login.
+
+You can also add an account manually from **Accounts & settings → Add OAuth token**. Manual tokens are stored in the macOS Keychain, never in `UserDefaults`, logs, or this repository.
 
 Colors update based on your configured warning/critical thresholds.
 
 ## Requirements
 
 - macOS 13+
-- [Claude Code](https://claude.ai/code) installed and logged in (the app reads its OAuth token from your Keychain — no separate credentials needed)
+- [Claude Code](https://claude.ai/code) installed and logged in, or an OAuth token for each manually configured account
 
 ## Install
 
@@ -49,12 +57,12 @@ Or open `ClaudeUsageSystray.xcodeproj` in Xcode and run with ⌘R.
 
 Toggle **Compact display** in Settings to switch between:
 
-- **Compact (default):** `35% · 71%` — both 5h and 7d inline, each colored by threshold
+- **Compact (default):** `account: 35% · 71%` — the selected account plus its 5h and weekly usage
 - **Normal:** icon + `71%` — weekly usage only
 
 ## How it works
 
-The app reads your Claude Code OAuth token from the macOS Keychain (`Claude Code-credentials`) and calls the same internal endpoint that powers `claude.ai/settings/usage`:
+The app calls the same internal endpoint that powers `claude.ai/settings/usage` for each configured account:
 
 ```
 GET https://api.anthropic.com/api/oauth/usage
@@ -62,7 +70,7 @@ Authorization: Bearer <oauth_token>
 anthropic-beta: oauth-2025-04-20
 ```
 
-The token is read once at startup and cached in memory. It refreshes automatically when you restart the app (Claude Code keeps it current in the Keychain).
+CCS tokens are read from their isolated profile files on each refresh. Manually added tokens are held in the macOS Keychain.
 
 > **Note:** This endpoint is undocumented and may change. It requires Claude Code to be installed and logged in.
 

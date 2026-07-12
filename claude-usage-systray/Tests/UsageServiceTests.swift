@@ -26,6 +26,27 @@ final class OAuthUsageResponseTests: XCTestCase {
         XCTAssertEqual(response.sevenDaySonnet?.utilization, 27.0)
     }
 
+    func testDecodesFableScopedLimit() throws {
+        let json = """
+        {
+          "five_hour": null,
+          "seven_day": null,
+          "seven_day_sonnet": null,
+          "limits": [{
+            "kind": "weekly_scoped",
+            "percent": 42.0,
+            "resets_at": "2026-03-20T12:00:00+00:00",
+            "scope": { "model": { "display_name": "Fable" } }
+          }]
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder().decode(OAuthUsageResponse.self, from: json)
+
+        XCTAssertEqual(response.fable?.utilization, 42)
+        XCTAssertNotNil(response.fable?.resetsAt)
+    }
+
     func testDecodesNullSonnet() throws {
         let json = """
         {

@@ -21,8 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupNotifications()
         startUsagePolling()
 
-        // Observe usage changes to keep the menu bar numbers up to date
-        usageService.$currentUsage
+        // The status item always follows the account with the most capacity left.
+        usageService.$accountUsages
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.updateStatusItemAppearance()
@@ -66,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupPopover() {
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 240, height: 200)
+        popover.contentSize = NSSize(width: 380, height: 360)
         popover.behavior = .transient
         popover.animates = true
         popover.contentViewController = NSHostingController(
@@ -86,9 +86,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startUsagePolling() {
-        if settingsManager.settings.isConfigured {
-            usageService.startPolling()
-        }
+        settingsManager.importCCSProfiles()
+        usageService.startPolling(accounts: settingsManager.accounts)
         
         Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             self?.checkForNotifications()
@@ -126,16 +125,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateStatusItemAppearance() {
         guard let button = statusItem.button else { return }
 
-        let snapshot = usageService.currentUsage
-        let weekUsage = snapshot.sevenDayUtilization
+        guard let selected = usageService.bestAccount else {
+            button.image = NSImage(systemSymbolName: "chart.pie", accessibilityDescription: "Claude Usage")
+            button.title = " — "
+            return
+        }
+        let snapshot = selected.snapshot
+        let weekUsage = snapshot.sevenDay.utilization
 
         if settingsManager.settings.compactDisplay {
-            let fiveH = snapshot.fiveHourUtilization
-            let sevenD = snapshot.sevenDayUtilization
+            let fiveH = snapshot.fiveHour.utilization
+            let sevenD = snapshot.sevenDay.utilization
             let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
 
             let str = NSMutableAttributedString()
-            str.append(NSAttributedString(string: "\(fiveH)%",
+            str.append(NSAttributedString(string: "\(selected.account.name): \(fiveH)%",
                 attributes: [.font: font, .foregroundColor: usageColor(for: fiveH)]))
             str.append(NSAttributedString(string: " · ",
                 attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]))
@@ -177,7 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func checkForNotifications() {
         guard settingsManager.settings.notificationsEnabled else { return }
         
-        let usage = usageService.currentUsage.sevenDayUtilization
+        guard let usage = usageService.bestAccount?.snapshot.sevenDay.utilization else { return }
         let warningThreshold = Int(settingsManager.settings.warningThreshold)
         let criticalThreshold = Int(settingsManager.settings.criticalThreshold)
 

@@ -1,119 +1,65 @@
 import SwiftUI
-import AppKit
 
 struct SettingsView: View {
     @ObservedObject var settingsManager: SettingsManager
     @ObservedObject var usageService: UsageService
     @Environment(\.dismiss) private var dismiss
-
-    @State private var warningThreshold: Double = 80
-    @State private var criticalThreshold: Double = 90
-    @State private var notificationsEnabled: Bool = true
-    @State private var compactDisplay: Bool = true
+    @State private var showAddAccount = false
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-
+            HStack {
+                Text("Claude Usage — accounts").font(.headline)
+                Spacer()
+                Button("Done") { dismiss() }
+            }.padding()
             Form {
-                Section("Auth") {
-                    HStack {
-                        Image(systemName: "lock.fill")
-                            .foregroundColor(.green)
-                        Text("Using Claude Code OAuth token")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text("Auto")
-                            .font(.caption2)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.green.opacity(0.2))
-                            .cornerRadius(4)
-                    }
-                }
-
-                Section("Menu Bar") {
-                    Toggle("Compact display (5h · 7d)", isOn: $compactDisplay)
-                        .onChange(of: compactDisplay) { newValue in
-                            settingsManager.setCompactDisplay(newValue)
-                        }
-                }
-
-                Section("Notifications") {
-                    Toggle("Enable usage alerts", isOn: $notificationsEnabled)
-                        .onChange(of: notificationsEnabled) { newValue in
-                            settingsManager.setNotificationsEnabled(newValue)
-                        }
-
-                    VStack(alignment: .leading) {
-                        Text("Warning threshold: \(Int(warningThreshold))%")
-                        Slider(value: $warningThreshold, in: 50...95, step: 5)
-                            .onChange(of: warningThreshold) { newValue in
-                                settingsManager.setWarningThreshold(newValue)
+                Section("Accounts") {
+                    ForEach(settingsManager.accounts) { account in
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(account.name)
+                                Text(account.ccsCredentialsPath == nil ? "Stored in Keychain" : "CCS profile")
+                                    .font(.caption).foregroundColor(.secondary)
                             }
+                            Spacer()
+                            Button(role: .destructive) { settingsManager.removeAccount(account); usageService.fetchUsage(accounts: settingsManager.accounts) } label: { Image(systemName: "trash") }
+                                .buttonStyle(.borderless)
+                        }
                     }
-
-                    VStack(alignment: .leading) {
-                        Text("Critical threshold: \(Int(criticalThreshold))%")
-                        Slider(value: $criticalThreshold, in: 60...100, step: 5)
-                            .onChange(of: criticalThreshold) { newValue in
-                                settingsManager.setCriticalThreshold(newValue)
-                            }
-                    }
+                    Button("Import CCS profiles") { settingsManager.importCCSProfiles(); usageService.fetchUsage(accounts: settingsManager.accounts) }
+                    Button("Add OAuth token…") { showAddAccount = true }
                 }
-            }
-            .formStyle(.grouped)
-            .padding()
-
-            footer
+                Section("Menu bar") { Toggle("Compact display", isOn: Binding(get: { settingsManager.settings.compactDisplay }, set: settingsManager.setCompactDisplay)) }
+                Section("Alerts") {
+                    Toggle("Enable usage alerts", isOn: Binding(get: { settingsManager.settings.notificationsEnabled }, set: settingsManager.setNotificationsEnabled))
+                    Slider(value: Binding(get: { settingsManager.settings.warningThreshold }, set: settingsManager.setWarningThreshold), in: 50...95, step: 5) { Text("Warning") }
+                    Slider(value: Binding(get: { settingsManager.settings.criticalThreshold }, set: settingsManager.setCriticalThreshold), in: 60...100, step: 5) { Text("Critical") }
+                }
+            }.formStyle(.grouped)
         }
-        .frame(width: 360, height: 390)
-        .onAppear { loadSettings() }
+        .frame(width: 420, height: 440)
+        .sheet(isPresented: $showAddAccount) { AddAccountView(settingsManager: settingsManager, usageService: usageService) }
     }
+}
 
-    private var header: some View {
-        HStack {
-            Image(systemName: "chart.pie.fill")
-                .font(.title)
-                .foregroundColor(.blue)
-            Text("Claude Usage Settings")
-                .font(.headline)
-            Spacer()
-            Button(action: { dismiss() }) {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(.borderless)
-        }
-        .padding()
-        .background(Color(NSColor.controlBackgroundColor))
-    }
+private struct AddAccountView: View {
+    @ObservedObject var settingsManager: SettingsManager
+    @ObservedObject var usageService: UsageService
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var token = ""
+    @State private var error: String?
 
-    private var footer: some View {
-        HStack {
-            Text("Data from claude.ai OAuth")
-                .font(.caption)
-                .foregroundColor(.secondary)
-            Spacer()
-            Button("Reset to Defaults") { resetToDefaults() }
-                .buttonStyle(.borderless)
-                .foregroundColor(.red)
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(Color(NSColor.controlBackgroundColor))
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Add Claude account").font(.headline)
+            TextField("Name (e.g. account-one)", text: $name)
+            SecureField("Claude Code OAuth access token", text: $token)
+            Text("The token is saved only in your macOS Keychain.").font(.caption).foregroundColor(.secondary)
+            if let error { Text(error).font(.caption).foregroundColor(.red) }
+            HStack { Spacer(); Button("Cancel") { dismiss() }; Button("Add") { add() }.disabled(token.isEmpty) }
+        }.padding().frame(width: 400)
     }
-
-    private func loadSettings() {
-        warningThreshold = settingsManager.settings.warningThreshold
-        criticalThreshold = settingsManager.settings.criticalThreshold
-        notificationsEnabled = settingsManager.settings.notificationsEnabled
-        compactDisplay = settingsManager.settings.compactDisplay
-    }
-
-    private func resetToDefaults() {
-        settingsManager.resetToDefaults()
-        loadSettings()
-    }
+    private func add() { do { try settingsManager.addAccount(name: name, token: token); usageService.fetchUsage(accounts: settingsManager.accounts); dismiss() } catch { self.error = error.localizedDescription } }
 }
