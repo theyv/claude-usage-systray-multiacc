@@ -58,9 +58,33 @@ func readToken(for account: ClaudeAccount) throws -> String {
 private func readCCSKeychainToken(profileDirectory: String) throws -> String {
     let digest = SHA256.hash(data: Data(profileDirectory.utf8))
     let suffix = digest.prefix(4).map { String(format: "%02x", $0) }.joined()
-    let payload = try readKeychainToken(service: "Claude Code-credentials-\(suffix)")
+    let service = "Claude Code-credentials-\(suffix)"
+    do {
+        return try decodeOAuthToken(readKeychainToken(service: service))
+    } catch {
+        // Some Claude Code items have an ACL that lets the system `security`
+        // helper read the payload while direct SecItem access returns an
+        // incomplete value to a newly ad-hoc-signed app.
+        return try decodeOAuthToken(readKeychainTokenUsingSecurityCLI(service: service))
+    }
+}
+
+private func decodeOAuthToken(_ payload: String) throws -> String {
     guard let data = payload.data(using: .utf8) else { throw KeychainError(status: errSecDecode) }
     return try JSONDecoder().decode(CCSCredentials.self, from: data).claudeAiOauth.accessToken
+}
+
+private func readKeychainTokenUsingSecurityCLI(service: String) throws -> String {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+    process.arguments = ["find-generic-password", "-s", service, "-w"]
+    let output = Pipe()
+    process.standardOutput = output
+    process.standardError = FileHandle.nullDevice
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else { throw KeychainError(status: errSecItemNotFound) }
+    return String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
 }
 
 func deleteAccountToken(for accountID: UUID) {
