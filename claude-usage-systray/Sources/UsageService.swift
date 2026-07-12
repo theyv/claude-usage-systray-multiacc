@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import CryptoKit
 
 private let accountTokenService = "Claude Usage Systray OAuth"
 
@@ -17,15 +18,20 @@ func saveAccountToken(_ token: String, for accountID: UUID) throws {
 }
 
 func readAccountToken(for accountID: UUID) throws -> String {
+    try readKeychainToken(service: accountTokenService, account: accountID.uuidString)
+}
+
+private func readKeychainToken(service: String, account: String? = nil) throws -> String {
     let query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
-        kSecAttrService as String: accountTokenService,
-        kSecAttrAccount as String: accountID.uuidString,
+        kSecAttrService as String: service,
         kSecReturnData as String: true,
         kSecMatchLimit as String: kSecMatchLimitOne
     ]
+    var completeQuery = query
+    if let account { completeQuery[kSecAttrAccount as String] = account }
     var result: AnyObject?
-    let status = SecItemCopyMatching(query as CFDictionary, &result)
+    let status = SecItemCopyMatching(completeQuery as CFDictionary, &result)
     guard status == errSecSuccess, let data = result as? Data, let token = String(data: data, encoding: .utf8) else { throw KeychainError(status: status) }
     return token
 }
@@ -37,10 +43,24 @@ private struct CCSCredentials: Decodable {
 
 func readToken(for account: ClaudeAccount) throws -> String {
     if let path = account.ccsCredentialsPath {
-        let data = try Data(contentsOf: URL(fileURLWithPath: path))
-        return try JSONDecoder().decode(CCSCredentials.self, from: data).claudeAiOauth.accessToken
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+           let credentials = try? JSONDecoder().decode(CCSCredentials.self, from: data) {
+            return credentials.claudeAiOauth.accessToken
+        }
+        return try readCCSKeychainToken(profilePath: path)
     }
     return try readAccountToken(for: account.id)
+}
+
+/// Claude Code derives a separate macOS Keychain service for every
+/// CLAUDE_CONFIG_DIR: `Claude Code-credentials-<first 8 SHA-256 chars>`.
+/// CCS profiles are exactly such isolated configuration directories.
+private func readCCSKeychainToken(profilePath: String) throws -> String {
+    let digest = SHA256.hash(data: Data(profilePath.utf8))
+    let suffix = digest.prefix(4).map { String(format: "%02x", $0) }.joined()
+    let payload = try readKeychainToken(service: "Claude Code-credentials-\(suffix)")
+    guard let data = payload.data(using: .utf8) else { throw KeychainError(status: errSecDecode) }
+    return try JSONDecoder().decode(CCSCredentials.self, from: data).claudeAiOauth.accessToken
 }
 
 func deleteAccountToken(for accountID: UUID) {

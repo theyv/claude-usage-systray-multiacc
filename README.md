@@ -20,7 +20,7 @@ The menu-bar item selects the account with the highest remaining capacity (the l
 
 ## Multi-account and CCS
 
-This fork understands [CCS](https://github.com/kaitranntt/ccs) account profiles. On launch it discovers profile directories in `~/.ccs/instances` and adds them by profile name. It reads a token only from that profile's `.credentials.json`; it does not copy CCS secrets into the app. A profile without a valid login is shown in the popover as needing login.
+This fork understands [CCS](https://github.com/kaitranntt/ccs) account profiles. On launch it discovers profile directories in `~/.ccs/instances` and adds them by profile name. It reads each profile's token from its `.credentials.json` or the profile-specific macOS Keychain entry that Claude Code creates; it does not copy CCS secrets into the app. A profile without a valid login is shown in the popover as needing login.
 
 You can also add an account manually from **Accounts & settings → Add OAuth token**. Manual tokens are stored in the macOS Keychain, never in `UserDefaults`, logs, or this repository.
 
