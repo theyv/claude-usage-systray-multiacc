@@ -62,6 +62,21 @@ final class OAuthUsageResponseTests: XCTestCase {
         XCTAssertEqual(response.fiveHour?.utilization, 10.0)
     }
 
+    func testDecodesNullResetTime() throws {
+        let json = """
+        {
+          "five_hour": { "utilization": 0.0, "resets_at": null },
+          "seven_day": { "utilization": 13.0, "resets_at": "2026-03-20T11:00:00+00:00" },
+          "seven_day_sonnet": null
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder().decode(OAuthUsageResponse.self, from: json)
+
+        XCTAssertEqual(response.fiveHour?.utilization, 0)
+        XCTAssertNil(response.fiveHour?.resetsAtDate)
+    }
+
     func testDecodesAllNulls() throws {
         let json = """
         {

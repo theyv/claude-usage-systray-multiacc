@@ -106,10 +106,10 @@ struct OAuthUsageResponse: Decodable {
 
     struct APIUsagePeriod: Decodable {
         let utilization: Double
-        let resetsAt: String
+        let resetsAt: String?
         enum CodingKeys: String, CodingKey { case utilization; case resetsAt = "resets_at" }
-        var asUsagePeriod: UsagePeriod { UsagePeriod(utilization: Int(utilization), resetsAt: parseISO8601(resetsAt)) }
-        var resetsAtDate: Date? { parseISO8601(resetsAt) }
+        var asUsagePeriod: UsagePeriod { UsagePeriod(utilization: Int(utilization), resetsAt: resetsAt.flatMap(parseISO8601)) }
+        var resetsAtDate: Date? { resetsAt.flatMap(parseISO8601) }
     }
 
     struct ScopedLimit: Decodable {
