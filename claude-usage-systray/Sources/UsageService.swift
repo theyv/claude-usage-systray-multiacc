@@ -70,7 +70,10 @@ private func decodeOAuthToken(_ payload: String) throws -> String {
 private func readKeychainTokenUsingSecurityCLI(service: String) throws -> String {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-    process.arguments = ["find-generic-password", "-s", service, "-w"]
+    let loginKeychain = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Keychains/login.keychain-db").path
+    process.arguments = ["find-generic-password", "-s", service, "-w", loginKeychain]
+    process.environment = ["HOME": FileManager.default.homeDirectoryForCurrentUser.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
     let output = Pipe()
     process.standardOutput = output
     process.standardError = FileHandle.nullDevice
