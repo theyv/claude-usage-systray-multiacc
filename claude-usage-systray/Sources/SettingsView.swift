@@ -62,6 +62,7 @@ private struct ClaudeCodeLoginView: View {
     @State private var code = ""
     @State private var error: String?
     @State private var didStart = false
+    @State private var createdAccount: ClaudeAccount?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -86,11 +87,17 @@ private struct ClaudeCodeLoginView: View {
             usageService.fetchUsage(accounts: settingsManager.accounts)
             dismiss()
         }
+        .onDisappear {
+            guard !login.completed, let createdAccount else { return }
+            login.cancel()
+            settingsManager.removeAccount(createdAccount)
+        }
     }
 
     private func start() {
         do {
             let account = try settingsManager.createClaudeCodeLoginProfile(name: name)
+            createdAccount = account
             let directory = URL(fileURLWithPath: account.ccsCredentialsPath!).deletingLastPathComponent()
             try login.start(profileDirectory: directory)
             didStart = true
@@ -131,6 +138,11 @@ private final class ClaudeCodeOAuthLogin: ObservableObject {
     }
 
     func submit(code: String) { input?.fileHandleForWriting.write(Data((code + "\n").utf8)); input?.fileHandleForWriting.closeFile(); status = "Finishing login…" }
+
+    func cancel() {
+        process?.terminate()
+        input?.fileHandleForWriting.closeFile()
+    }
 
     private func consume(_ text: String) {
         let parts = text.split(whereSeparator: { $0.isWhitespace || $0 == "\u{07}" })

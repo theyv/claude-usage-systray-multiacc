@@ -7,21 +7,13 @@ struct MenuBarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    if usageService.accountUsages.isEmpty && !usageService.isLoading {
-                        Text("No Claude accounts configured")
-                            .foregroundColor(.secondary)
-                            .padding(12)
-                    } else {
-                        ForEach(usageService.accountUsages) { accountUsage in
-                            AccountUsageView(accountUsage: accountUsage, settings: settingsManager.settings)
-                            if accountUsage.id != usageService.accountUsages.last?.id { Divider().padding(.vertical, 6) }
-                        }
-                    }
-                }
+            // Keep a short account list compact, while allowing a longer list to
+            // scroll instead of growing underneath the MacBook notch.
+            ViewThatFits(in: .vertical) {
+                accountList
+                ScrollView { accountList }
             }
-            .frame(height: 455)
+            .frame(maxHeight: 455)
 
             Divider().padding(.vertical, 6)
             Button(action: refreshUsage) { Label("Refresh all accounts", systemImage: "arrow.clockwise") }
@@ -32,8 +24,23 @@ struct MenuBarView: View {
                 .buttonStyle(.plain).padding(.horizontal, 12).padding(.vertical, 5)
         }
         .padding(.vertical, 8)
-        .frame(width: 380, height: 570)
+        .frame(width: 380)
         .sheet(isPresented: $showSettings) { SettingsView(settingsManager: settingsManager, usageService: usageService) }
+    }
+
+    @ViewBuilder private var accountList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if usageService.accountUsages.isEmpty && !usageService.isLoading {
+                Text("No Claude accounts configured")
+                    .foregroundColor(.secondary)
+                    .padding(12)
+            } else {
+                ForEach(usageService.accountUsages) { accountUsage in
+                    AccountUsageView(accountUsage: accountUsage, settings: settingsManager.settings)
+                    if accountUsage.id != usageService.accountUsages.last?.id { Divider().padding(.vertical, 6) }
+                }
+            }
+        }
     }
 
     private func refreshUsage() { usageService.fetchUsage(accounts: settingsManager.accounts) }
