@@ -2,6 +2,8 @@
 
 A macOS menu bar app that monitors several [Claude.ai](https://claude.ai) accounts at once. It automatically puts the account with the most usable quota left in the menu bar, while the popover shows every account.
 
+This project is a multi-account fork of [adntgv/claude-usage-systray](https://github.com/adntgv/claude-usage-systray). The original project remains the `upstream` Git remote.
+
 ![Claude Usage Systray](claude-usage-systray/Resources/Assets.xcassets/Image.imageset/Image.png)
 
 ## What it shows

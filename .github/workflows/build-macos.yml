@@ -1,0 +1,58 @@
+name: Build macOS app
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: claude-usage-systray
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        run: >-
+          xcodebuild test
+          -project ClaudeUsageSystray.xcodeproj
+          -scheme ClaudeUsageSystrayTests
+          -destination 'platform=macOS'
+
+      - name: Build release app
+        run: >-
+          xcodebuild build
+          -project ClaudeUsageSystray.xcodeproj
+          -scheme ClaudeUsageSystray
+          -configuration Release
+          -derivedDataPath "$RUNNER_TEMP/ClaudeUsageSystray"
+
+      - name: Package app
+        run: >-
+          ditto -c -k --sequesterRsrc --keepParent
+          "$RUNNER_TEMP/ClaudeUsageSystray/Build/Products/Release/ClaudeUsageSystray.app"
+          "$GITHUB_WORKSPACE/ClaudeUsageSystray-multiacc-macos.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClaudeUsageSystray-multiacc-macos
+          path: ClaudeUsageSystray-multiacc-macos.zip
+          if-no-files-found: error
+
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          "$GITHUB_WORKSPACE/ClaudeUsageSystray-multiacc-macos.zip"
+          --generate-notes
