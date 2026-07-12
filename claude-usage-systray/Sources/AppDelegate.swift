@@ -125,6 +125,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateStatusItemAppearance() {
         guard let button = statusItem.button else { return }
 
+        let displayOrder = ["account-one", "account-two", "account-three"]
+        let rankedUsages = usageService.accountUsages
+            .filter { $0.error == nil && $0.snapshot.sevenDay.utilization < 100 }
+            .sorted {
+                let left = displayOrder.firstIndex(of: $0.account.name.lowercased()) ?? displayOrder.count
+                let right = displayOrder.firstIndex(of: $1.account.name.lowercased()) ?? displayOrder.count
+                return left == right ? $0.account.name < $1.account.name : left < right
+            }
+
         guard let selected = usageService.bestAccount else {
             button.image = NSImage(systemSymbolName: "chart.pie", accessibilityDescription: "Claude Usage")
             button.title = " — "
@@ -134,20 +143,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let weekUsage = snapshot.sevenDay.utilization
 
         if settingsManager.settings.compactDisplay {
-            let fiveH = snapshot.fiveHour.utilization
-            let sevenD = snapshot.sevenDay.utilization
             let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
-
             let str = NSMutableAttributedString()
-            str.append(NSAttributedString(string: "\(selected.account.name): \(fiveH)%",
-                attributes: [.font: font, .foregroundColor: usageColor(for: fiveH)]))
-            str.append(NSAttributedString(string: " · ",
-                attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]))
-            str.append(NSAttributedString(string: "\(sevenD)%",
-                attributes: [.font: font, .foregroundColor: usageColor(for: sevenD)]))
+            for (index, accountUsage) in rankedUsages.enumerated() {
+                if index > 0 {
+                    str.append(NSAttributedString(string: " | ", attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]))
+                }
+                let weeklyUsage = accountUsage.snapshot.sevenDay.utilization
+                str.append(NSAttributedString(string: "\(weeklyUsage)%", attributes: [.font: font, .foregroundColor: usageColor(for: weeklyUsage)]))
+            }
 
             button.image = nil
-            button.attributedTitle = str
+            button.attributedTitle = str.length > 0 ? str : NSAttributedString(string: " — ", attributes: [.font: font])
         } else {
             let config = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
             let symbolName: String

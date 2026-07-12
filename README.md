@@ -59,7 +59,7 @@ Or open `ClaudeUsageSystray.xcodeproj` in Xcode and run with ⌘R.
 
 Toggle **Compact display** in Settings to switch between:
 
-- **Compact (default):** `account: 35% · 71%` — the selected account plus its 5h and weekly usage
+- **Compact (default):** `33% | 13% | 42%` — weekly usage for CCS profiles in the order Dawid, Paweł, Amelia. A profile at its weekly limit is omitted from the menu bar.
 - **Normal:** icon + `71%` — weekly usage only
 
 ## How it works
