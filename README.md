@@ -1,5 +1,7 @@
 # Claude Usage Systray — Multi-Account
 
+> **Personal-use project:** this is an unofficial community fork. It relies on undocumented Claude APIs and local Claude Code/CCS data, so some features may break or not work perfectly.
+
 Menu-bar app for macOS that shows Claude usage across multiple accounts: 5h, weekly and Fable limits, including reset countdowns.
 
 ![Claude Usage Systray showing three accounts](docs/multi-account-popover.png)
