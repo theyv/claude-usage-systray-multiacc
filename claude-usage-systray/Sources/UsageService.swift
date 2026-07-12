@@ -117,13 +117,15 @@ final class UsageService: ObservableObject {
     @Published private(set) var isLoading = false
 
     private var refreshTimer: Timer?
-    private let normalInterval: TimeInterval = 5 * 60
+    private let normalInterval: TimeInterval = 3 * 60
+    private let rateLimitInterval: TimeInterval = 10 * 60
+    private var retryAfter: Date?
     var urlSession: URLSession = .shared
     private init() {}
 
     var bestAccount: AccountUsage? {
         accountUsages
-            .filter { $0.error == nil }
+            .filter { $0.hasUsageData }
             .max { $0.availableCapacity < $1.availableCapacity }
     }
 
@@ -139,30 +141,51 @@ final class UsageService: ObservableObject {
     }
 
     func fetchUsage(accounts: [ClaudeAccount]) {
+        guard !isLoading else { return }
+        if let retryAfter, retryAfter > Date() { return }
         isLoading = true
+        let previousUsages = Dictionary(uniqueKeysWithValues: accountUsages.map { ($0.id, $0) })
         Task {
             // Anthropic's usage endpoint is sensitive to bursts. Fetching CCS
             // profiles one at a time prevents a manual refresh from turning all
             // rows into simultaneous 429 failures.
             var results: [AccountUsage] = []
+            var rateLimited = false
             for account in accounts {
-                results.append(await fetchUsage(for: account))
+                if rateLimited {
+                    results.append(staleUsage(for: account, previous: previousUsages[account.id], error: "Rate limited — retrying later"))
+                    continue
+                }
+
+                let result = await fetchUsage(for: account, previous: previousUsages[account.id])
+                results.append(result)
+                if result.error?.hasPrefix("HTTP 429") == true {
+                    rateLimited = true
+                }
                 try? await Task.sleep(nanoseconds: 350_000_000)
             }
             await MainActor.run {
                 self.accountUsages = results.sorted { $0.account.name.localizedStandardCompare($1.account.name) == .orderedAscending }
+                if rateLimited { self.retryAfter = Date().addingTimeInterval(self.rateLimitInterval) }
                 self.isLoading = false
             }
         }
     }
 
-    private func fetchUsage(for account: ClaudeAccount) async -> AccountUsage {
+    private func fetchUsage(for account: ClaudeAccount, previous: AccountUsage?) async -> AccountUsage {
         do {
             let response = try await fetchOAuthUsage(accessToken: readToken(for: account))
-            return AccountUsage(account: account, snapshot: UsageSnapshot(fiveHour: response.fiveHour?.asUsagePeriod ?? UsageSnapshot.placeholder.fiveHour, sevenDay: response.sevenDay?.asUsagePeriod ?? UsageSnapshot.placeholder.sevenDay, fable: response.fable ?? response.sevenDaySonnet?.asUsagePeriod, lastUpdated: Date()), error: nil)
+            return AccountUsage(account: account, snapshot: UsageSnapshot(fiveHour: response.fiveHour?.asUsagePeriod ?? UsageSnapshot.placeholder.fiveHour, sevenDay: response.sevenDay?.asUsagePeriod ?? UsageSnapshot.placeholder.sevenDay, fable: response.fable ?? response.sevenDaySonnet?.asUsagePeriod, lastUpdated: Date()), error: nil, isStale: false)
         } catch {
-            return AccountUsage(account: account, snapshot: .placeholder, error: error.localizedDescription)
+            return staleUsage(for: account, previous: previous, error: error.localizedDescription)
         }
+    }
+
+    private func staleUsage(for account: ClaudeAccount, previous: AccountUsage?, error: String) -> AccountUsage {
+        if let previous, previous.hasUsageData {
+            return AccountUsage(account: account, snapshot: previous.snapshot, error: error, isStale: true)
+        }
+        return AccountUsage(account: account, snapshot: .placeholder, error: error, isStale: false)
     }
 
     func fetchOAuthUsage(accessToken: String) async throws -> OAuthUsageResponse {

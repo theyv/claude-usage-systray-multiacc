@@ -149,8 +149,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if index > 0 {
                     str.append(NSAttributedString(string: " | ", attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]))
                 }
-                let weeklyUsage = accountUsage.snapshot.sevenDay.utilization
-                str.append(NSAttributedString(string: "\(weeklyUsage)%", attributes: [.font: font, .foregroundColor: usageColor(for: weeklyUsage)]))
+                let fiveHourUsage = accountUsage.snapshot.fiveHour.utilization
+                str.append(NSAttributedString(string: "\(fiveHourUsage)%", attributes: [.font: font, .foregroundColor: usageColor(for: fiveHourUsage)]))
             }
 
             button.image = nil

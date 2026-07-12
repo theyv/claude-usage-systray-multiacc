@@ -50,12 +50,17 @@ struct AccountUsage: Identifiable, Hashable {
     let account: ClaudeAccount
     let snapshot: UsageSnapshot
     let error: String?
+    let isStale: Bool
 
     var id: UUID { account.id }
 
     /// The account is only as available as its tightest general quota.
     var availableCapacity: Int {
         min(snapshot.fiveHour.remaining, snapshot.sevenDay.remaining)
+    }
+
+    var hasUsageData: Bool {
+        snapshot.fiveHour.resetsAt != nil || snapshot.sevenDay.resetsAt != nil
     }
 }
 

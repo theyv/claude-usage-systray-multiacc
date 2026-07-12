@@ -43,13 +43,14 @@ private struct AccountUsageView: View {
             HStack {
                 Text(accountUsage.account.name).fontWeight(.semibold)
                 Spacer()
-                Text(accountUsage.error == nil ? "\(accountUsage.availableCapacity)% available" : "Unavailable")
+                Text(accountUsage.hasUsageData ? "\(accountUsage.availableCapacity)% available" : "Unavailable")
                     .font(.caption).foregroundColor(.secondary)
             }
             if let error = accountUsage.error {
                 Text(error)
                     .font(.caption).foregroundColor(.red)
-            } else {
+            }
+            if accountUsage.hasUsageData {
                 LimitRow(label: "5h", period: accountUsage.snapshot.fiveHour, icon: "clock", settings: settings)
                 LimitRow(label: "Weekly", period: accountUsage.snapshot.sevenDay, icon: "calendar", settings: settings)
                 if let fable = accountUsage.snapshot.fable {
