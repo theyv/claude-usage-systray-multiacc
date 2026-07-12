@@ -59,32 +59,12 @@ private func readCCSKeychainToken(profileDirectory: String) throws -> String {
     let digest = SHA256.hash(data: Data(profileDirectory.utf8))
     let suffix = digest.prefix(4).map { String(format: "%02x", $0) }.joined()
     let service = "Claude Code-credentials-\(suffix)"
-    do {
-        return try decodeOAuthToken(readKeychainToken(service: service))
-    } catch {
-        // Some Claude Code items have an ACL that lets the system `security`
-        // helper read the payload while direct SecItem access returns an
-        // incomplete value to a newly ad-hoc-signed app.
-        return try decodeOAuthToken(readKeychainTokenUsingSecurityCLI(service: service))
-    }
+    return try decodeOAuthToken(readKeychainToken(service: service))
 }
 
 private func decodeOAuthToken(_ payload: String) throws -> String {
     guard let data = payload.data(using: .utf8) else { throw KeychainError(status: errSecDecode) }
     return try JSONDecoder().decode(CCSCredentials.self, from: data).claudeAiOauth.accessToken
-}
-
-private func readKeychainTokenUsingSecurityCLI(service: String) throws -> String {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-    process.arguments = ["find-generic-password", "-s", service, "-w"]
-    let output = Pipe()
-    process.standardOutput = output
-    process.standardError = FileHandle.nullDevice
-    try process.run()
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else { throw KeychainError(status: errSecItemNotFound) }
-    return String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
 }
 
 func deleteAccountToken(for accountID: UUID) {
@@ -144,6 +124,7 @@ final class UsageService: ObservableObject {
     private let normalInterval: TimeInterval = 3 * 60
     private let rateLimitInterval: TimeInterval = 10 * 60
     private var retryAfter: Date?
+    private var cachedTokens: [UUID: String] = [:]
     var urlSession: URLSession = .shared
     private init() {}
 
@@ -198,11 +179,18 @@ final class UsageService: ObservableObject {
 
     private func fetchUsage(for account: ClaudeAccount, previous: AccountUsage?) async -> AccountUsage {
         do {
-            let response = try await fetchOAuthUsage(accessToken: readToken(for: account))
+            let response = try await fetchOAuthUsage(accessToken: try accessToken(for: account))
             return AccountUsage(account: account, snapshot: UsageSnapshot(fiveHour: response.fiveHour?.asUsagePeriod ?? UsageSnapshot.placeholder.fiveHour, sevenDay: response.sevenDay?.asUsagePeriod ?? UsageSnapshot.placeholder.sevenDay, fable: response.fable ?? response.sevenDaySonnet?.asUsagePeriod, lastUpdated: Date()), error: nil, isStale: false)
         } catch {
             return staleUsage(for: account, previous: previous, error: error.localizedDescription)
         }
+    }
+
+    private func accessToken(for account: ClaudeAccount) throws -> String {
+        if let cachedToken = cachedTokens[account.id] { return cachedToken }
+        let token = try readToken(for: account)
+        cachedTokens[account.id] = token
+        return token
     }
 
     private func staleUsage(for account: ClaudeAccount, previous: AccountUsage?, error: String) -> AccountUsage {
