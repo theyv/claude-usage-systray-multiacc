@@ -7,13 +7,11 @@ struct MenuBarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Keep a short account list compact, while allowing a longer list to
-            // scroll instead of growing underneath the MacBook notch.
-            ViewThatFits(in: .vertical) {
-                accountList
-                ScrollView { accountList }
-            }
-            .frame(maxHeight: 455)
+            // A fixed list area keeps the three configured accounts visible at
+            // once. Extra accounts scroll within this area rather than reaching
+            // into the MacBook notch.
+            ScrollView { accountList }
+                .frame(height: 455)
 
             Divider().padding(.vertical, 6)
             Button(action: refreshUsage) { Label("Refresh all accounts", systemImage: "arrow.clockwise") }
@@ -24,7 +22,7 @@ struct MenuBarView: View {
                 .buttonStyle(.plain).padding(.horizontal, 12).padding(.vertical, 5)
         }
         .padding(.vertical, 8)
-        .frame(width: 380)
+        .frame(width: 380, height: 570)
         .sheet(isPresented: $showSettings) { SettingsView(settingsManager: settingsManager, usageService: usageService) }
     }
 
