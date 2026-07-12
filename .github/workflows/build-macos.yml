@@ -26,6 +26,7 @@ jobs:
           -project ClaudeUsageSystray.xcodeproj
           -scheme ClaudeUsageSystrayTests
           -destination 'platform=macOS'
+          CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
 
       - name: Build release app
         run: >-
@@ -34,6 +35,7 @@ jobs:
           -scheme ClaudeUsageSystray
           -configuration Release
           -derivedDataPath "$RUNNER_TEMP/ClaudeUsageSystray"
+          CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
 
       - name: Package app
         run: >-
