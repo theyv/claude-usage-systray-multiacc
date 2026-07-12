@@ -21,7 +21,7 @@ struct MenuBarView: View {
                     }
                 }
             }
-            .frame(maxHeight: 470)
+            .frame(height: 455)
 
             Divider().padding(.vertical, 6)
             Button(action: refreshUsage) { Label("Refresh all accounts", systemImage: "arrow.clockwise") }
@@ -32,7 +32,7 @@ struct MenuBarView: View {
                 .buttonStyle(.plain).padding(.horizontal, 12).padding(.vertical, 5)
         }
         .padding(.vertical, 8)
-        .frame(minWidth: 330)
+        .frame(width: 380, height: 570)
         .sheet(isPresented: $showSettings) { SettingsView(settingsManager: settingsManager, usageService: usageService) }
     }
 
@@ -89,7 +89,7 @@ private struct LimitRow: View {
                             .frame(width: max(2, geometry.size.width * CGFloat(period.utilization) / 100))
                     }
                 }
-                .frame(width: 104, height: 5)
+                .frame(width: 180, height: 5)
             }
             Spacer()
             if let reset = period.resetsAt {

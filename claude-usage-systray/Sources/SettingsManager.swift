@@ -24,6 +24,16 @@ final class SettingsManager: ObservableObject {
         accounts.append(account)
     }
 
+    func createClaudeCodeLoginProfile(name: String) throws -> ClaudeAccount {
+        let account = ClaudeAccount(name: name.isEmpty ? "Claude account \(accounts.count + 1)" : name)
+        let directory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/ClaudeUsageSystray/Profiles/\(account.id.uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let storedAccount = ClaudeAccount(id: account.id, name: account.name, ccsCredentialsPath: directory.appendingPathComponent(".credentials.json").path)
+        accounts.append(storedAccount)
+        return storedAccount
+    }
+
     /// Discovers CCS account lanes without copying their secrets. A profile that
     /// has not been logged in is deliberately kept: the popover can explain it
     /// needs login instead of silently disappearing.

@@ -6,6 +6,7 @@ import Combine
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
+    private var outsideClickMonitor: Any?
     private let usageService = UsageService.shared
     private let settingsManager = SettingsManager.shared
     
@@ -51,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         usageService.stopPolling()
+        if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
     }
 
     private func setupStatusItem() {
@@ -74,6 +76,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 settingsManager: settingsManager
             )
         )
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            DispatchQueue.main.async { self?.closePopover() }
+        }
     }
 
     private func setupNotifications() {
@@ -174,14 +179,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func usageColor(for percentage: Int) -> NSColor {
-        let criticalThreshold = Int(settingsManager.settings.criticalThreshold)
-        let warningThreshold = Int(settingsManager.settings.warningThreshold)
-        if percentage >= criticalThreshold {
-            return .systemRed
-        } else if percentage >= warningThreshold {
-            return .systemOrange
-        }
-        return .labelColor
+        guard percentage > 0 else { return .labelColor }
+        let hue = max(0, 0.33 * (1 - CGFloat(percentage) / 100))
+        return NSColor(calibratedHue: hue, saturation: 0.82, brightness: 0.92, alpha: 1)
     }
 
     private func checkForNotifications() {
