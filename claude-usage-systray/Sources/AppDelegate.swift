@@ -9,8 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let usageService = UsageService.shared
     private let settingsManager = SettingsManager.shared
     
-    private var lastWarningNotified: Int = 0
-    private var lastCriticalNotified: Int = 0
+    private var sentAlerts = Set<String>()
 
     // Keep Combine subscriptions alive
     private var cancellables = Set<AnyCancellable>()
@@ -187,25 +186,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func checkForNotifications() {
         guard settingsManager.settings.notificationsEnabled else { return }
-        
-        guard let usage = usageService.bestAccount?.snapshot.sevenDay.utilization else { return }
         let warningThreshold = Int(settingsManager.settings.warningThreshold)
         let criticalThreshold = Int(settingsManager.settings.criticalThreshold)
 
-        if usage >= criticalThreshold && lastCriticalNotified < criticalThreshold {
-            sendNotification(
-                title: "Critical: Claude Usage",
-                body: "You've used \(usage)% of your weekly quota. Consider pausing non-essential tasks.",
-                isCritical: true
-            )
-            lastCriticalNotified = criticalThreshold
-        } else if usage >= warningThreshold && lastWarningNotified < warningThreshold && usage < criticalThreshold {
-            sendNotification(
-                title: "Warning: Claude Usage",
-                body: "You've used \(usage)% of your weekly quota.",
-                isCritical: false
-            )
-            lastWarningNotified = warningThreshold
+        for accountUsage in usageService.accountUsages where accountUsage.hasUsageData {
+            checkAlert(account: accountUsage.account.name, limit: "5h", usage: accountUsage.snapshot.fiveHour.utilization, warning: warningThreshold, critical: criticalThreshold)
+            checkAlert(account: accountUsage.account.name, limit: "weekly", usage: accountUsage.snapshot.sevenDay.utilization, warning: warningThreshold, critical: criticalThreshold)
+        }
+    }
+
+    private func checkAlert(account: String, limit: String, usage: Int, warning: Int, critical: Int) {
+        let warningKey = "\(account)-\(limit)-warning"
+        let criticalKey = "\(account)-\(limit)-critical"
+        if usage < warning {
+            sentAlerts.remove(warningKey)
+            sentAlerts.remove(criticalKey)
+            return
+        }
+        if usage >= critical, !sentAlerts.contains(criticalKey) {
+            sendNotification(title: "Critical: \(account) Claude usage", body: "\(limit) usage is \(usage)%.", isCritical: true)
+            sentAlerts.insert(criticalKey)
+        } else if usage < critical, !sentAlerts.contains(warningKey) {
+            sendNotification(title: "Warning: \(account) Claude usage", body: "\(limit) usage is \(usage)%.", isCritical: false)
+            sentAlerts.insert(warningKey)
         }
     }
 
