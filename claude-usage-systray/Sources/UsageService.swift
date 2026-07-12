@@ -13,7 +13,7 @@ func saveAccountToken(_ token: String, for accountID: UUID) throws {
     var item = query
     item[kSecValueData as String] = Data(token.utf8)
     let status = SecItemAdd(item as CFDictionary, nil)
-    guard status == errSecSuccess else { throw KeychainError(status) }
+    guard status == errSecSuccess else { throw KeychainError(status: status) }
 }
 
 func readAccountToken(for accountID: UUID) throws -> String {
@@ -26,7 +26,7 @@ func readAccountToken(for accountID: UUID) throws -> String {
     ]
     var result: AnyObject?
     let status = SecItemCopyMatching(query as CFDictionary, &result)
-    guard status == errSecSuccess, let data = result as? Data, let token = String(data: data, encoding: .utf8) else { throw KeychainError(status) }
+    guard status == errSecSuccess, let data = result as? Data, let token = String(data: data, encoding: .utf8) else { throw KeychainError(status: status) }
     return token
 }
 
