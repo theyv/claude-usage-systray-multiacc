@@ -1,9 +1,9 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  # The upstream notarized-release workflow needs the upstream Apple secrets.
+  # This fork publishes unsigned community builds from build-macos.yml instead.
+  workflow_dispatch:
 
 permissions:
   contents: write

@@ -37,6 +37,12 @@ jobs:
           -derivedDataPath "$RUNNER_TEMP/ClaudeUsageSystray"
           CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
 
+      - name: Ad-hoc sign and verify the app
+        run: |
+          APP="$RUNNER_TEMP/ClaudeUsageSystray/Build/Products/Release/ClaudeUsageSystray.app"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict --verbose=4 "$APP"
+
       - name: Package app
         run: >-
           ditto -c -k --sequesterRsrc --keepParent
