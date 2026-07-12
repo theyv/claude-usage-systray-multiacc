@@ -27,7 +27,7 @@ You can also add an account manually from **Accounts & settings → Add OAuth to
 ### Setting up accounts
 
 - **With CCS:** create and log in to profiles with `ccs auth create <name>`. The app discovers them automatically; no token needs to be pasted into the app.
-- **Without CCS:** use **Accounts & settings → Add OAuth token** once for each Claude Code account. The app stores those tokens in the local macOS Keychain.
+- **Without CCS:** log in normally with Claude Code, then choose **Accounts & settings → Import current Claude Code login**. For additional accounts, use **Add OAuth token**; tokens stay in the local macOS Keychain.
 
 CCS support relies on Claude Code's local profile and Keychain layout, which is undocumented and may change. No OAuth tokens, API keys, account e-mails, or usage data are committed to this repository.
 

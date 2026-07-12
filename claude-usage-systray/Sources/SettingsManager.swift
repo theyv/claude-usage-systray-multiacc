@@ -40,6 +40,17 @@ final class SettingsManager: ObservableObject {
         }
     }
 
+    /// Imports the normal Claude Code login for people who do not use CCS.
+    /// Claude Code keeps its OAuth token in the Keychain associated with this
+    /// configuration directory, so no secret is copied into preferences.
+    func importCurrentClaudeCodeLogin() {
+        let configDirectory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude", isDirectory: true)
+        let credentials = configDirectory.appendingPathComponent(".credentials.json").path
+        guard !accounts.contains(where: { $0.ccsCredentialsPath == credentials }) else { return }
+        accounts.append(ClaudeAccount(name: "Claude Code account \(accounts.count + 1)", ccsCredentialsPath: credentials))
+    }
+
     func removeAccount(_ account: ClaudeAccount) {
         deleteAccountToken(for: account.id)
         if let ccsCredentialsPath = account.ccsCredentialsPath {

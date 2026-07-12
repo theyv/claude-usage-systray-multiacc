@@ -19,7 +19,7 @@ struct SettingsView: View {
                         HStack {
                             VStack(alignment: .leading) {
                                 Text(account.name)
-                                Text(account.ccsCredentialsPath == nil ? "Stored in Keychain" : "CCS profile")
+                                Text(accountSource(account))
                                     .font(.caption).foregroundColor(.secondary)
                             }
                             Spacer()
@@ -28,6 +28,7 @@ struct SettingsView: View {
                         }
                     }
                     Button("Import CCS profiles") { settingsManager.importCCSProfiles(); usageService.fetchUsage(accounts: settingsManager.accounts) }
+                    Button("Import current Claude Code login") { settingsManager.importCurrentClaudeCodeLogin(); usageService.fetchUsage(accounts: settingsManager.accounts) }
                     Button("Add OAuth token…") { showAddAccount = true }
                 }
                 Section("Menu bar") { Toggle("Compact display", isOn: Binding(get: { settingsManager.settings.compactDisplay }, set: settingsManager.setCompactDisplay)) }
@@ -40,6 +41,11 @@ struct SettingsView: View {
         }
         .frame(width: 420, height: 440)
         .sheet(isPresented: $showAddAccount) { AddAccountView(settingsManager: settingsManager, usageService: usageService) }
+    }
+
+    private func accountSource(_ account: ClaudeAccount) -> String {
+        guard let path = account.ccsCredentialsPath else { return "Stored in Keychain" }
+        return path.contains("/.ccs/") ? "CCS profile" : "Claude Code login"
     }
 }
 
