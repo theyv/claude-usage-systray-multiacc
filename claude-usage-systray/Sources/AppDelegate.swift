@@ -129,14 +129,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateStatusItemAppearance() {
         guard let button = statusItem.button else { return }
 
-        let displayOrder = ["account-one", "account-two", "account-three"]
         let rankedUsages = usageService.accountUsages
             .filter { $0.error == nil && $0.snapshot.sevenDay.utilization < 100 }
-            .sorted {
-                let left = displayOrder.firstIndex(of: $0.account.name.lowercased()) ?? displayOrder.count
-                let right = displayOrder.firstIndex(of: $1.account.name.lowercased()) ?? displayOrder.count
-                return left == right ? $0.account.name < $1.account.name : left < right
-            }
 
         guard let selected = usageService.bestAccount else {
             button.image = NSImage(systemSymbolName: "chart.pie", accessibilityDescription: "Claude Usage")

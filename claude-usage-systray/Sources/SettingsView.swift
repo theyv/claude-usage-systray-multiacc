@@ -163,7 +163,7 @@ private struct AddAccountView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Add Claude account").font(.headline)
-            TextField("Name (e.g. account-one)", text: $name)
+            TextField("Name (e.g. Work)", text: $name)
             SecureField("Claude Code OAuth access token", text: $token)
             Text("The token is saved only in your macOS Keychain.").font(.caption).foregroundColor(.secondary)
             if let error { Text(error).font(.caption).foregroundColor(.red) }
