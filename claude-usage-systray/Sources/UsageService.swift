@@ -47,7 +47,7 @@ func readToken(for account: ClaudeAccount) throws -> String {
            let credentials = try? JSONDecoder().decode(CCSCredentials.self, from: data) {
             return credentials.claudeAiOauth.accessToken
         }
-        return try readCCSKeychainToken(profilePath: path)
+        return try readCCSKeychainToken(profileDirectory: URL(fileURLWithPath: path).deletingLastPathComponent().path)
     }
     return try readAccountToken(for: account.id)
 }
@@ -55,8 +55,8 @@ func readToken(for account: ClaudeAccount) throws -> String {
 /// Claude Code derives a separate macOS Keychain service for every
 /// CLAUDE_CONFIG_DIR: `Claude Code-credentials-<first 8 SHA-256 chars>`.
 /// CCS profiles are exactly such isolated configuration directories.
-private func readCCSKeychainToken(profilePath: String) throws -> String {
-    let digest = SHA256.hash(data: Data(profilePath.utf8))
+private func readCCSKeychainToken(profileDirectory: String) throws -> String {
+    let digest = SHA256.hash(data: Data(profileDirectory.utf8))
     let suffix = digest.prefix(4).map { String(format: "%02x", $0) }.joined()
     let payload = try readKeychainToken(service: "Claude Code-credentials-\(suffix)")
     guard let data = payload.data(using: .utf8) else { throw KeychainError(status: errSecDecode) }
