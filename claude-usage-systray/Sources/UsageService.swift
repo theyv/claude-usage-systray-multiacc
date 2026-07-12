@@ -141,11 +141,13 @@ final class UsageService: ObservableObject {
     func fetchUsage(accounts: [ClaudeAccount]) {
         isLoading = true
         Task {
-            let results = await withTaskGroup(of: AccountUsage.self, returning: [AccountUsage].self) { group in
-                for account in accounts { group.addTask { await self.fetchUsage(for: account) } }
-                var values: [AccountUsage] = []
-                for await value in group { values.append(value) }
-                return values
+            // Anthropic's usage endpoint is sensitive to bursts. Fetching CCS
+            // profiles one at a time prevents a manual refresh from turning all
+            // rows into simultaneous 429 failures.
+            var results: [AccountUsage] = []
+            for account in accounts {
+                results.append(await fetchUsage(for: account))
+                try? await Task.sleep(nanoseconds: 350_000_000)
             }
             await MainActor.run {
                 self.accountUsages = results.sorted { $0.account.name.localizedStandardCompare($1.account.name) == .orderedAscending }
@@ -168,7 +170,12 @@ final class UsageService: ObservableObject {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         let (data, response) = try await urlSession.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { throw URLError(.badServerResponse) }
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard http.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw NSError(domain: "OAuthUsage", code: http.statusCode,
+                          userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode): \(body.prefix(160))"])
+        }
         return try JSONDecoder().decode(OAuthUsageResponse.self, from: data)
     }
 }

@@ -43,11 +43,11 @@ private struct AccountUsageView: View {
             HStack {
                 Text(accountUsage.account.name).fontWeight(.semibold)
                 Spacer()
-                Text("\(accountUsage.availableCapacity)% available")
+                Text(accountUsage.error == nil ? "\(accountUsage.availableCapacity)% available" : "Unavailable")
                     .font(.caption).foregroundColor(.secondary)
             }
             if let error = accountUsage.error {
-                Text(accountUsage.account.ccsCredentialsPath == nil ? error : "Not logged in to this CCS profile")
+                Text(error)
                     .font(.caption).foregroundColor(.red)
             } else {
                 LimitRow(label: "5h", period: accountUsage.snapshot.fiveHour, icon: "clock", settings: settings)
