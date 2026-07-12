@@ -24,6 +24,13 @@ This fork understands [CCS](https://github.com/kaitranntt/ccs) account profiles.
 
 You can also add an account manually from **Accounts & settings → Add OAuth token**. Manual tokens are stored in the macOS Keychain, never in `UserDefaults`, logs, or this repository.
 
+### Setting up accounts
+
+- **With CCS:** create and log in to profiles with `ccs auth create <name>`. The app discovers them automatically; no token needs to be pasted into the app.
+- **Without CCS:** use **Accounts & settings → Add OAuth token** once for each Claude Code account. The app stores those tokens in the local macOS Keychain.
+
+CCS support relies on Claude Code's local profile and Keychain layout, which is undocumented and may change. No OAuth tokens, API keys, account e-mails, or usage data are committed to this repository.
+
 Colors update based on your configured warning/critical thresholds.
 
 ## Requirements

@@ -67,8 +67,11 @@ struct AccountUsage: Identifiable, Hashable {
 func formatTimeRemaining(until date: Date, from now: Date = Date()) -> String {
     let interval = date.timeIntervalSince(now)
     if interval <= 0 { return "now" }
-    let hours = Int(interval) / 3600
-    let minutes = (Int(interval) % 3600) / 60
+    let totalMinutes = Int(interval) / 60
+    let days = totalMinutes / (24 * 60)
+    let hours = (totalMinutes % (24 * 60)) / 60
+    let minutes = totalMinutes % 60
+    if days > 0 { return "\(days)d \(hours)h \(minutes)m" }
     return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
 }
 
