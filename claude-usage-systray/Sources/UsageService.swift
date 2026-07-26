@@ -1,8 +1,10 @@
 import Foundation
 import Security
 import CryptoKit
+import WebKit
 
 private let accountTokenService = "Claude Usage Systray OAuth"
+private let webSessionService = "Claude Usage Systray Web Session"
 
 private enum UsageAPIError: LocalizedError {
     case rateLimited
@@ -33,6 +35,31 @@ func saveAccountToken(_ token: String, for accountID: UUID) throws {
 
 func readAccountToken(for accountID: UUID) throws -> String {
     try readKeychainToken(service: accountTokenService, account: accountID.uuidString)
+}
+
+func saveWebSessionKey(_ sessionKey: String, for accountID: UUID) throws {
+    let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: webSessionService,
+        kSecAttrAccount as String: accountID.uuidString
+    ]
+    SecItemDelete(query as CFDictionary)
+    var item = query
+    item[kSecValueData as String] = Data(sessionKey.utf8)
+    let status = SecItemAdd(item as CFDictionary, nil)
+    guard status == errSecSuccess else { throw KeychainError(status: status) }
+}
+
+func readWebSessionKey(for accountID: UUID) throws -> String {
+    try readKeychainToken(service: webSessionService, account: accountID.uuidString)
+}
+
+func deleteWebSessionKey(for accountID: UUID) {
+    SecItemDelete([
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: webSessionService,
+        kSecAttrAccount as String: accountID.uuidString
+    ] as CFDictionary)
 }
 
 private func readKeychainToken(service: String, account: String? = nil) throws -> String {
@@ -235,7 +262,15 @@ final class UsageService: ObservableObject {
 
     private func fetchUsage(for account: ClaudeAccount, previous: UsageSnapshot?) async -> AccountUsage {
         do {
-            let response = try await fetchOAuthUsage(accessToken: try accessToken(for: account))
+            let response: OAuthUsageResponse
+            if let organizationID = account.webOrganizationID {
+                response = try await WebUsageFetcher.shared.fetchUsage(
+                    sessionKey: readWebSessionKey(for: account.id),
+                    organizationID: organizationID
+                )
+            } else {
+                response = try await fetchOAuthUsage(accessToken: try accessToken(for: account))
+            }
             return AccountUsage(account: account, snapshot: UsageSnapshot(fiveHour: response.fiveHour?.asUsagePeriod ?? UsageSnapshot.placeholder.fiveHour, sevenDay: response.sevenDay?.asUsagePeriod ?? UsageSnapshot.placeholder.sevenDay, fable: response.fable ?? response.sevenDaySonnet?.asUsagePeriod, lastUpdated: Date()), error: nil, isStale: false)
         } catch {
             return staleUsage(for: account, previous: previous, error: error.localizedDescription)
@@ -267,5 +302,120 @@ final class UsageService: ObservableObject {
             throw UsageAPIError.httpStatus(http.statusCode)
         }
         return try JSONDecoder().decode(OAuthUsageResponse.self, from: data)
+    }
+}
+
+private enum WebUsageError: LocalizedError {
+    case busy
+    case invalidResponse
+    case sessionExpired
+    case httpStatus(Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .busy:
+            return "A web usage refresh is already running."
+        case .invalidResponse:
+            return "Claude.ai returned an unexpected response."
+        case .sessionExpired:
+            return "Claude.ai session expired — reconnect this account in Settings."
+        case .httpStatus(let status):
+            return "Could not fetch Claude.ai usage (HTTP \(status))."
+        }
+    }
+}
+
+/// Loads the same claude.ai organization usage page as the Windows widget.
+/// A real WebKit page is used so Cloudflare sees a browser session rather than
+/// a bare API client.
+@MainActor
+private final class WebUsageFetcher: NSObject, WKNavigationDelegate {
+    static let shared = WebUsageFetcher()
+
+    private var continuation: CheckedContinuation<OAuthUsageResponse, Error>?
+    private var webView: WKWebView?
+
+    func fetchUsage(sessionKey: String, organizationID: String) async throws -> OAuthUsageResponse {
+        guard continuation == nil else { throw WebUsageError.busy }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+
+            let configuration = WKWebViewConfiguration()
+            configuration.websiteDataStore = .default()
+            let webView = WKWebView(frame: .zero, configuration: configuration)
+            webView.navigationDelegate = self
+            webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
+            self.webView = webView
+
+            guard let cookie = HTTPCookie(properties: [
+                .domain: ".claude.ai",
+                .path: "/",
+                .name: "sessionKey",
+                .value: sessionKey,
+                .secure: "TRUE"
+            ]) else {
+                finish(.failure(WebUsageError.invalidResponse))
+                return
+            }
+
+            configuration.websiteDataStore.httpCookieStore.setCookie(cookie) {
+                guard let url = URL(string: "https://claude.ai/api/organizations/\(organizationID)/usage") else {
+                    self.finish(.failure(WebUsageError.invalidResponse))
+                    return
+                }
+                webView.load(URLRequest(url: url))
+            }
+        }
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+    ) {
+        if let response = navigationResponse.response as? HTTPURLResponse, response.statusCode != 200 {
+            decisionHandler(.cancel)
+            if response.statusCode == 401 || response.statusCode == 403 {
+                finish(.failure(WebUsageError.sessionExpired))
+            } else if response.statusCode == 429 {
+                finish(.failure(UsageAPIError.rateLimited))
+            } else {
+                finish(.failure(WebUsageError.httpStatus(response.statusCode)))
+            }
+            return
+        }
+        decisionHandler(.allow)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        webView.evaluateJavaScript("document.body.innerText || document.body.textContent") { result, error in
+            if let error {
+                self.finish(.failure(error))
+                return
+            }
+            guard let text = result as? String, let data = text.data(using: .utf8) else {
+                self.finish(.failure(WebUsageError.invalidResponse))
+                return
+            }
+            do {
+                self.finish(.success(try JSONDecoder().decode(OAuthUsageResponse.self, from: data)))
+            } catch {
+                self.finish(.failure(WebUsageError.invalidResponse))
+            }
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        finish(.failure(error))
+    }
+
+    private func finish(_ result: Result<OAuthUsageResponse, Error>) {
+        guard let continuation else { return }
+        self.continuation = nil
+        webView?.navigationDelegate = nil
+        webView?.stopLoading()
+        webView = nil
+        continuation.resume(with: result)
     }
 }

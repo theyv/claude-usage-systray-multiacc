@@ -63,6 +63,7 @@ final class SettingsManager: ObservableObject {
 
     func removeAccount(_ account: ClaudeAccount) {
         deleteAccountToken(for: account.id)
+        deleteWebSessionKey(for: account.id)
         if let ccsCredentialsPath = account.ccsCredentialsPath {
             ignoredCCSProfiles.insert(ccsCredentialsPath)
             defaults.set(Array(ignoredCCSProfiles), forKey: ignoredCCSProfilesKey)
@@ -73,6 +74,12 @@ final class SettingsManager: ObservableObject {
     func renameAccount(_ account: ClaudeAccount, to name: String) {
         guard let index = accounts.firstIndex(of: account) else { return }
         accounts[index].name = name.isEmpty ? account.name : name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func connectWebSession(_ account: ClaudeAccount, sessionKey: String, organizationID: String) throws {
+        guard let index = accounts.firstIndex(of: account) else { return }
+        try saveWebSessionKey(sessionKey, for: account.id)
+        accounts[index].webOrganizationID = organizationID
     }
 
     func moveAccount(_ account: ClaudeAccount, by offset: Int) {

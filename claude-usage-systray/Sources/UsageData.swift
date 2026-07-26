@@ -15,11 +15,15 @@ struct ClaudeAccount: Codable, Identifiable, Hashable {
     /// When present, the token is read directly from a CCS profile instead of
     /// being duplicated into this app's Keychain item.
     var ccsCredentialsPath: String?
+    /// When present, usage is fetched from claude.ai with a browser session,
+    /// matching the Windows widget and avoiding the stricter OAuth usage API.
+    var webOrganizationID: String?
 
-    init(id: UUID = UUID(), name: String, ccsCredentialsPath: String? = nil) {
+    init(id: UUID = UUID(), name: String, ccsCredentialsPath: String? = nil, webOrganizationID: String? = nil) {
         self.id = id
         self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         self.ccsCredentialsPath = ccsCredentialsPath
+        self.webOrganizationID = webOrganizationID
     }
 }
 

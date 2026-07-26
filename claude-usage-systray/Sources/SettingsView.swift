@@ -1,5 +1,6 @@
 import SwiftUI
 import Foundation
+import WebKit
 
 struct SettingsView: View {
     @ObservedObject var settingsManager: SettingsManager
@@ -9,6 +10,7 @@ struct SettingsView: View {
     @State private var showClaudeCodeLogin = false
     @State private var accountToRename: ClaudeAccount?
     @State private var renamedAccountName = ""
+    @State private var webLoginAccount: ClaudeAccount?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,6 +29,11 @@ struct SettingsView: View {
                                     .font(.caption).foregroundColor(.secondary)
                             }
                             Spacer()
+                            Button { webLoginAccount = account } label: {
+                                Image(systemName: account.webOrganizationID == nil ? "globe" : "checkmark.circle.fill")
+                            }
+                            .buttonStyle(.borderless)
+                            .help(account.webOrganizationID == nil ? "Connect Claude.ai web session" : "Reconnect Claude.ai web session")
                             Button { beginRename(account) } label: { Image(systemName: "pencil") }
                                 .buttonStyle(.borderless)
                             Button { move(account, by: -1) } label: { Image(systemName: "chevron.up") }
@@ -55,6 +62,9 @@ struct SettingsView: View {
         .frame(width: 420, height: 440)
         .sheet(isPresented: $showAddAccount) { AddAccountView(settingsManager: settingsManager, usageService: usageService) }
         .sheet(isPresented: $showClaudeCodeLogin) { ClaudeCodeLoginView(settingsManager: settingsManager, usageService: usageService) }
+        .sheet(item: $webLoginAccount) { account in
+            ClaudeWebLoginView(account: account, settingsManager: settingsManager, usageService: usageService)
+        }
         .alert("Rename account", isPresented: Binding(
             get: { accountToRename != nil },
             set: { if !$0 { accountToRename = nil } }
@@ -66,6 +76,7 @@ struct SettingsView: View {
     }
 
     private func accountSource(_ account: ClaudeAccount) -> String {
+        if account.webOrganizationID != nil { return "Claude.ai web session" }
         guard let path = account.ccsCredentialsPath else { return "Stored in Keychain" }
         return path.contains("/.ccs/") ? "CCS profile" : "Claude Code login"
     }
@@ -83,6 +94,153 @@ struct SettingsView: View {
     private func saveRename() {
         if let accountToRename { settingsManager.renameAccount(accountToRename, to: renamedAccountName) }
         accountToRename = nil
+    }
+}
+
+private struct ClaudeWebCredential: Equatable {
+    let sessionKey: String
+    let organizationID: String
+}
+
+private struct ClaudeWebLoginView: View {
+    let account: ClaudeAccount
+    @ObservedObject var settingsManager: SettingsManager
+    @ObservedObject var usageService: UsageService
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var login = ClaudeWebLogin()
+    @State private var saveError: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Connect \(account.name) to Claude.ai").font(.headline)
+                    Text(login.status).font(.caption).foregroundColor(.secondary)
+                }
+                Spacer()
+                Button("Cancel") { dismiss() }
+            }
+            .padding()
+
+            if let error = login.error ?? saveError {
+                Text(error).font(.caption).foregroundColor(.red).padding(.horizontal)
+            }
+
+            ClaudeWebView(login: login)
+        }
+        .frame(width: 960, height: 680)
+        .onAppear { login.start() }
+        .onDisappear { login.cancel() }
+        .onChange(of: login.credential) { credential in
+            guard let credential else { return }
+            do {
+                try settingsManager.connectWebSession(
+                    account,
+                    sessionKey: credential.sessionKey,
+                    organizationID: credential.organizationID
+                )
+                usageService.fetchUsage(accounts: settingsManager.accounts)
+                dismiss()
+            } catch {
+                saveError = error.localizedDescription
+            }
+        }
+    }
+}
+
+private struct ClaudeWebView: NSViewRepresentable {
+    @ObservedObject var login: ClaudeWebLogin
+
+    func makeNSView(context: Context) -> WKWebView { login.webView }
+    func updateNSView(_ nsView: WKWebView, context: Context) {}
+}
+
+@MainActor
+private final class ClaudeWebLogin: NSObject, ObservableObject, WKNavigationDelegate, WKHTTPCookieStoreObserver {
+    @Published private(set) var status = "Preparing Claude.ai login…"
+    @Published private(set) var credential: ClaudeWebCredential?
+    @Published private(set) var error: String?
+
+    private enum Stage { case idle, signingIn, findingOrganization, complete }
+    private var stage = Stage.idle
+    private var capturedSessionKey: String?
+
+    lazy var webView: WKWebView = {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .default()
+        let view = WKWebView(frame: .zero, configuration: configuration)
+        view.navigationDelegate = self
+        view.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
+        return view
+    }()
+
+    func start() {
+        guard stage == .idle else { return }
+        error = nil
+        let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
+        cookieStore.getAllCookies { cookies in
+            let sessionCookies = cookies.filter { $0.name == "sessionKey" && $0.domain.contains("claude.ai") }
+            let group = DispatchGroup()
+            for cookie in sessionCookies {
+                group.enter()
+                cookieStore.delete(cookie) { group.leave() }
+            }
+            group.notify(queue: .main) {
+                cookieStore.add(self)
+                self.stage = .signingIn
+                self.status = "Sign in normally. The window will close automatically when connected."
+                self.webView.load(URLRequest(url: URL(string: "https://claude.ai/login")!))
+            }
+        }
+    }
+
+    func cancel() {
+        webView.configuration.websiteDataStore.httpCookieStore.remove(self)
+        webView.stopLoading()
+    }
+
+    func cookiesDidChange(in cookieStore: WKHTTPCookieStore) {
+        guard stage == .signingIn else { return }
+        cookieStore.getAllCookies { cookies in
+            guard self.stage == .signingIn,
+                  let sessionKey = cookies.first(where: { $0.name == "sessionKey" && $0.domain.contains("claude.ai") })?.value else { return }
+            self.capturedSessionKey = sessionKey
+            self.stage = .findingOrganization
+            self.status = "Login complete. Finding your Claude organization…"
+            self.webView.load(URLRequest(url: URL(string: "https://claude.ai/api/organizations")!))
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard stage == .findingOrganization else { return }
+        webView.evaluateJavaScript("document.body.innerText || document.body.textContent") { result, evaluationError in
+            if let evaluationError {
+                self.fail(evaluationError.localizedDescription)
+                return
+            }
+            guard let sessionKey = self.capturedSessionKey,
+                  let text = result as? String,
+                  let data = text.data(using: .utf8),
+                  let organizations = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+                  let organization = organizations.first,
+                  let organizationID = (organization["uuid"] ?? organization["id"]) as? String else {
+                self.fail("Login succeeded, but no Claude organization was found.")
+                return
+            }
+            self.stage = .complete
+            self.status = "Connected."
+            self.webView.configuration.websiteDataStore.httpCookieStore.remove(self)
+            self.credential = ClaudeWebCredential(sessionKey: sessionKey, organizationID: organizationID)
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        fail(error.localizedDescription)
+    }
+
+    private func fail(_ message: String) {
+        error = message
+        status = "Could not connect this account."
     }
 }
 
