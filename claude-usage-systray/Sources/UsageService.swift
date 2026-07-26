@@ -192,12 +192,21 @@ final class UsageService: ObservableObject {
             var results: [AccountUsage] = []
             var nextRateLimitRetryAfter = currentRateLimitRetryAfter
             for account in accounts {
+                let inMemorySnapshot = previousSnapshots[account.id]
+                let lastKnownSnapshot: UsageSnapshot?
+                if let inMemorySnapshot,
+                   inMemorySnapshot.fiveHour.resetsAt != nil || inMemorySnapshot.sevenDay.resetsAt != nil {
+                    lastKnownSnapshot = inMemorySnapshot
+                } else {
+                    lastKnownSnapshot = cachedSnapshots[account.id]
+                }
+
                 if let retryAfter = nextRateLimitRetryAfter[account.id], retryAfter > Date() {
-                    results.append(staleUsage(for: account, previous: previousSnapshots[account.id] ?? cachedSnapshots[account.id], error: UsageAPIError.rateLimited.localizedDescription))
+                    results.append(staleUsage(for: account, previous: lastKnownSnapshot, error: UsageAPIError.rateLimited.localizedDescription))
                     continue
                 }
 
-                let result = await fetchUsage(for: account, previous: previousSnapshots[account.id] ?? cachedSnapshots[account.id])
+                let result = await fetchUsage(for: account, previous: lastKnownSnapshot)
                 results.append(result)
                 if result.error == UsageAPIError.rateLimited.localizedDescription {
                     nextRateLimitRetryAfter[account.id] = Date().addingTimeInterval(rateLimitInterval)
