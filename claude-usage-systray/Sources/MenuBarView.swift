@@ -4,17 +4,39 @@ extension Notification.Name {
     static let showClaudeUsageSettings = Notification.Name("ShowClaudeUsageSettings")
 }
 
+/// Height the account list reports so the popover can be exactly as tall as the
+/// accounts need.
+private struct AccountListHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct MenuBarView: View {
     @ObservedObject var usageService: UsageService
     @ObservedObject var settingsManager: SettingsManager
+    @State private var accountListHeight: CGFloat = 0
+
+    /// Beyond this the list scrolls instead of growing into the MacBook notch.
+    private let maximumListHeight: CGFloat = 455
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // A fixed list area keeps the three configured accounts visible at
-            // once. Extra accounts scroll within this area rather than reaching
-            // into the MacBook notch.
-            ScrollView { accountList }
-                .frame(height: 455)
+            // The list takes only the height its accounts occupy, so three
+            // accounts do not leave the empty space a fixed height left behind.
+            ScrollView {
+                accountList
+                    .background(
+                        GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: AccountListHeightKey.self,
+                                value: geometry.size.height
+                            )
+                        }
+                    )
+            }
+            .frame(height: min(max(accountListHeight, 1), maximumListHeight))
 
             Divider().padding(.vertical, 6)
             Button(action: refreshUsage) { Label("Refresh all accounts", systemImage: "arrow.clockwise") }
@@ -27,7 +49,8 @@ struct MenuBarView: View {
                 .buttonStyle(.plain).padding(.horizontal, 12).padding(.vertical, 5)
         }
         .padding(.vertical, 8)
-        .frame(width: 380, height: 570)
+        .frame(width: 380)
+        .onPreferenceChange(AccountListHeightKey.self) { accountListHeight = $0 }
     }
 
     @ViewBuilder private var accountList: some View {

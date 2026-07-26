@@ -1,5 +1,42 @@
 import XCTest
+import AppKit
 @testable import ClaudeUsageSystray
+
+// MARK: - Editing shortcuts
+
+final class ClaudeEditMenuTests: XCTestCase {
+
+    private var editMenu: NSMenu? {
+        ClaudeEditMenu.makeMainMenu().items.first?.submenu
+    }
+
+    func testPasteIsBoundToCommandV() throws {
+        // Without this binding an agent app cannot paste into the login window.
+        let paste = try XCTUnwrap(editMenu?.items.first { $0.title == "Paste" })
+
+        XCTAssertEqual(paste.keyEquivalent, "v")
+        XCTAssertEqual(paste.keyEquivalentModifierMask, [.command])
+        XCTAssertEqual(paste.action, NSSelectorFromString("paste:"))
+    }
+
+    func testProvidesEveryStandardEditingShortcut() throws {
+        let items = try XCTUnwrap(editMenu?.items.filter { !$0.isSeparatorItem })
+
+        let bindings = items.map { item in
+            "\(item.keyEquivalent)-\(item.action.map(NSStringFromSelector) ?? "none")"
+        }
+        XCTAssertEqual(bindings, ["z-undo:", "z-redo:", "x-cut:", "c-copy:", "v-paste:", "a-selectAll:"])
+    }
+
+    func testRedoIsDistinguishedByShift() throws {
+        let items = try XCTUnwrap(editMenu?.items)
+        let undo = try XCTUnwrap(items.first { $0.title == "Undo" })
+        let redo = try XCTUnwrap(items.first { $0.title == "Redo" })
+
+        XCTAssertEqual(undo.keyEquivalentModifierMask, [.command])
+        XCTAssertEqual(redo.keyEquivalentModifierMask, [.command, .shift])
+    }
+}
 
 // MARK: - OAuthUsageResponse decoding
 

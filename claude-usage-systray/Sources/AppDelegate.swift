@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.mainMenu = ClaudeEditMenu.makeMainMenu()
         setupStatusItem()
         setupPopover()
         setupNotifications()
@@ -74,15 +75,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupPopover() {
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 380, height: 590)
         popover.behavior = .transient
         popover.animates = true
-        popover.contentViewController = NSHostingController(
+        let hostingController = NSHostingController(
             rootView: MenuBarView(
                 usageService: usageService,
                 settingsManager: settingsManager
             )
         )
+        // The popover follows the content, so its height matches the number of
+        // accounts instead of being fixed.
+        hostingController.sizingOptions = .preferredContentSize
+        popover.contentViewController = hostingController
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             DispatchQueue.main.async { self?.closePopover() }
         }
@@ -259,5 +263,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 print("Notification error: \(error)")
             }
         }
+    }
+}
+
+/// The standard editing shortcuts.
+///
+/// An `LSUIElement` app never shows a menu bar, and AppKit routes Cmd-X/C/V/A
+/// through the main menu's key equivalents — with no main menu, pasting into the
+/// Claude.ai login window or the sign-in code field silently did nothing. This
+/// menu is never displayed; it exists so those shortcuts reach the first
+/// responder. Selectors are looked up by name because they are informal actions
+/// implemented by AppKit and WebKit responders rather than declared methods.
+enum ClaudeEditMenu {
+    static func makeMainMenu() -> NSMenu {
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(item(title: "Undo", action: "undo:", key: "z"))
+        editMenu.addItem(item(title: "Redo", action: "redo:", key: "z", modifiers: [.command, .shift]))
+        editMenu.addItem(.separator())
+        editMenu.addItem(item(title: "Cut", action: "cut:", key: "x"))
+        editMenu.addItem(item(title: "Copy", action: "copy:", key: "c"))
+        editMenu.addItem(item(title: "Paste", action: "paste:", key: "v"))
+        editMenu.addItem(item(title: "Select All", action: "selectAll:", key: "a"))
+
+        let editItem = NSMenuItem()
+        editItem.title = "Edit"
+        editItem.submenu = editMenu
+
+        let mainMenu = NSMenu()
+        mainMenu.addItem(editItem)
+        return mainMenu
+    }
+
+    private static func item(
+        title: String,
+        action: String,
+        key: String,
+        modifiers: NSEvent.ModifierFlags = [.command]
+    ) -> NSMenuItem {
+        let item = NSMenuItem(
+            title: title,
+            action: NSSelectorFromString(action),
+            keyEquivalent: key
+        )
+        item.keyEquivalentModifierMask = modifiers
+        return item
     }
 }
