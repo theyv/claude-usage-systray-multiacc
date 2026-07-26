@@ -6,6 +6,7 @@ import Combine
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
+    private var settingsWindow: NSWindow?
     private var outsideClickMonitor: Any?
     private let usageService = UsageService.shared
     private let settingsManager = SettingsManager.shared
@@ -46,6 +47,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self,
             selector: #selector(settingsDidChange),
             name: UserDefaults.didChangeNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(showSettingsWindow),
+            name: .showClaudeUsageSettings,
             object: nil
         )
     }
@@ -115,6 +122,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func closePopover() {
         popover.performClose(nil)
+    }
+
+    @objc private func showSettingsWindow() {
+        closePopover()
+
+        if settingsWindow == nil {
+            let settingsView = SettingsView(
+                settingsManager: settingsManager,
+                usageService: usageService,
+                onDone: { [weak self] in self?.settingsWindow?.close() }
+            )
+            let hostingController = NSHostingController(rootView: settingsView)
+            let window = NSWindow(contentViewController: hostingController)
+            window.title = "Claude Usage — Accounts & Settings"
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.setContentSize(NSSize(width: 520, height: 500))
+            window.minSize = NSSize(width: 520, height: 500)
+            window.isReleasedWhenClosed = false
+            window.tabbingMode = .disallowed
+            window.collectionBehavior = [.managed, .participatesInCycle]
+            window.center()
+            settingsWindow = window
+        }
+
+        guard let settingsWindow else { return }
+        if settingsWindow.isMiniaturized { settingsWindow.deminiaturize(nil) }
+        settingsWindow.makeKeyAndOrderFront(nil)
+        settingsWindow.attachedSheet?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func settingsDidChange() {

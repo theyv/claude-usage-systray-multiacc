@@ -1,9 +1,12 @@
 import SwiftUI
 
+extension Notification.Name {
+    static let showClaudeUsageSettings = Notification.Name("ShowClaudeUsageSettings")
+}
+
 struct MenuBarView: View {
     @ObservedObject var usageService: UsageService
     @ObservedObject var settingsManager: SettingsManager
-    @State private var showSettings = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -16,14 +19,15 @@ struct MenuBarView: View {
             Divider().padding(.vertical, 6)
             Button(action: refreshUsage) { Label("Refresh all accounts", systemImage: "arrow.clockwise") }
                 .buttonStyle(.plain).padding(.horizontal, 12).padding(.vertical, 5)
-            Button(action: { showSettings = true }) { Label("Accounts & settings", systemImage: "gear") }
+            Button(action: {
+                NotificationCenter.default.post(name: .showClaudeUsageSettings, object: nil)
+            }) { Label("Accounts & settings", systemImage: "gear") }
                 .buttonStyle(.plain).padding(.horizontal, 12).padding(.vertical, 5)
             Button(action: { NSApplication.shared.terminate(nil) }) { Label("Quit", systemImage: "power") }
                 .buttonStyle(.plain).padding(.horizontal, 12).padding(.vertical, 5)
         }
         .padding(.vertical, 8)
         .frame(width: 380, height: 570)
-        .sheet(isPresented: $showSettings) { SettingsView(settingsManager: settingsManager, usageService: usageService) }
     }
 
     @ViewBuilder private var accountList: some View {

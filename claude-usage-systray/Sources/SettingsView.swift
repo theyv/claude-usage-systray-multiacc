@@ -5,6 +5,7 @@ import WebKit
 struct SettingsView: View {
     @ObservedObject var settingsManager: SettingsManager
     @ObservedObject var usageService: UsageService
+    var onDone: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @State private var showAddAccount = false
     @State private var showClaudeCodeLogin = false
@@ -17,7 +18,9 @@ struct SettingsView: View {
             HStack {
                 Text("Claude Usage — accounts").font(.headline)
                 Spacer()
-                Button("Done") { dismiss() }
+                Button("Done") {
+                    if let onDone { onDone() } else { dismiss() }
+                }
             }.padding()
             Form {
                 Section("Accounts") {
@@ -59,7 +62,7 @@ struct SettingsView: View {
                 }
             }.formStyle(.grouped)
         }
-        .frame(width: 420, height: 440)
+        .frame(width: 520, height: 500)
         .sheet(isPresented: $showAddAccount) { AddAccountView(settingsManager: settingsManager, usageService: usageService) }
         .sheet(isPresented: $showClaudeCodeLogin) { ClaudeCodeLoginView(settingsManager: settingsManager, usageService: usageService) }
         .sheet(item: $webLoginAccount) { account in
