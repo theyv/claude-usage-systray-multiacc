@@ -151,9 +151,67 @@ final class ClaudeOrganizationsResponseParserTests: XCTestCase {
         )
     }
 
+    func testPrefersChatOrganizationOverAPIOnlyOrganization() {
+        let json = """
+        [
+          {"uuid":"org-api","capabilities":["api"]},
+          {"uuid":"org-chat","capabilities":["api","chat"]}
+        ]
+        """
+        XCTAssertEqual(
+            ClaudeOrganizationsResponseParser.firstOrganizationID(from: json),
+            "org-chat"
+        )
+    }
+
     func testRejectsEmptyOrInvalidResponses() {
         XCTAssertNil(ClaudeOrganizationsResponseParser.firstOrganizationID(from: "[]"))
         XCTAssertNil(ClaudeOrganizationsResponseParser.firstOrganizationID(from: "<html></html>"))
+    }
+}
+
+final class ClaudeWebAccountFingerprintTests: XCTestCase {
+
+    func testFingerprintNormalizesEmailWithoutPersistingIt() {
+        let first = claudeWebAccountFingerprint(
+            from: #"{"email_address":" Person@Example.com "}"#
+        )
+        let second = claudeWebAccountFingerprint(
+            from: #"{"email_address":"person@example.com"}"#
+        )
+
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(first?.count, 64)
+        XCTAssertFalse(first?.contains("person") ?? true)
+    }
+
+    func testFingerprintRejectsMissingEmail() {
+        XCTAssertNil(claudeWebAccountFingerprint(from: #"{"memberships":[]}"#))
+        XCTAssertNil(claudeWebAccountFingerprint(from: "invalid"))
+    }
+}
+
+final class WebSessionFileStoreTests: XCTestCase {
+
+    func testStoresSessionsInAUserOnlyFile() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = directory.appendingPathComponent("web-sessions.json")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = WebSessionFileStore(fileURL: fileURL)
+        let accountID = UUID()
+        XCTAssertNil(try store.sessionKey(for: accountID))
+
+        try store.save("test-session", for: accountID)
+        XCTAssertEqual(try store.sessionKey(for: accountID), "test-session")
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
+        XCTAssertEqual(permissions.map { $0 & 0o777 }, 0o600)
+
+        store.delete(for: accountID)
+        XCTAssertNil(try store.sessionKey(for: accountID))
     }
 }
 
@@ -208,5 +266,21 @@ final class FormatTimeRemainingTests: XCTestCase {
     func testExactlyOneHour() {
         let now = Date()
         XCTAssertEqual(formatTimeRemaining(until: now.addingTimeInterval(3600), from: now), "1h 0m")
+    }
+
+    func testRoundsPartialMinuteUp() {
+        let now = Date()
+        XCTAssertEqual(formatTimeRemaining(until: now.addingTimeInterval(59), from: now), "1m")
+    }
+
+    func testRoundsResetTimestampToNearestMinute() {
+        XCTAssertEqual(
+            roundedToNearestMinute(Date(timeIntervalSince1970: 119)),
+            Date(timeIntervalSince1970: 120)
+        )
+        XCTAssertEqual(
+            roundedToNearestMinute(Date(timeIntervalSince1970: 121)),
+            Date(timeIntervalSince1970: 120)
+        )
     }
 }

@@ -76,8 +76,23 @@ final class SettingsManager: ObservableObject {
         accounts[index].name = name.isEmpty ? account.name : name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    func connectWebSession(_ account: ClaudeAccount, sessionKey: String, organizationID: String) throws {
+    func connectWebSession(
+        _ account: ClaudeAccount,
+        sessionKey: String,
+        organizationID: String,
+        accountFingerprint: String?
+    ) throws {
         guard let index = accounts.firstIndex(of: account) else { return }
+        if let accountFingerprint,
+           let duplicate = accounts.first(where: {
+               $0.id != account.id && $0.webAccountFingerprint == accountFingerprint
+           }) {
+            throw NSError(
+                domain: "ClaudeWebSession",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "This Claude.ai account is already connected as \(duplicate.name)."]
+            )
+        }
         if let duplicate = accounts.first(where: { candidate in
             guard candidate.id != account.id,
                   candidate.webOrganizationID != nil,
@@ -92,6 +107,13 @@ final class SettingsManager: ObservableObject {
         }
         try saveWebSessionKey(sessionKey, for: account.id)
         accounts[index].webOrganizationID = organizationID
+        accounts[index].webAccountFingerprint = accountFingerprint
+    }
+
+    func setWebAccountFingerprint(_ fingerprint: String, for accountID: UUID) {
+        guard let index = accounts.firstIndex(where: { $0.id == accountID }),
+              accounts[index].webAccountFingerprint != fingerprint else { return }
+        accounts[index].webAccountFingerprint = fingerprint
     }
 
     func moveAccount(_ account: ClaudeAccount, by offset: Int) {

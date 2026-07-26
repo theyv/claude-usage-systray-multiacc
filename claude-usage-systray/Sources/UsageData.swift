@@ -18,12 +18,22 @@ struct ClaudeAccount: Codable, Identifiable, Hashable {
     /// When present, usage is fetched from claude.ai with a browser session,
     /// matching the Windows widget and avoiding the stricter OAuth usage API.
     var webOrganizationID: String?
+    /// SHA-256 of the normalized Claude.ai account email. The email itself is
+    /// never persisted; this only prevents connecting the same login twice.
+    var webAccountFingerprint: String?
 
-    init(id: UUID = UUID(), name: String, ccsCredentialsPath: String? = nil, webOrganizationID: String? = nil) {
+    init(
+        id: UUID = UUID(),
+        name: String,
+        ccsCredentialsPath: String? = nil,
+        webOrganizationID: String? = nil,
+        webAccountFingerprint: String? = nil
+    ) {
         self.id = id
         self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         self.ccsCredentialsPath = ccsCredentialsPath
         self.webOrganizationID = webOrganizationID
+        self.webAccountFingerprint = webAccountFingerprint
     }
 }
 
@@ -71,7 +81,7 @@ struct AccountUsage: Identifiable, Hashable {
 func formatTimeRemaining(until date: Date, from now: Date = Date()) -> String {
     let interval = date.timeIntervalSince(now)
     if interval <= 0 { return "now" }
-    let totalMinutes = Int(interval) / 60
+    let totalMinutes = Int(ceil(interval / 60))
     let days = totalMinutes / (24 * 60)
     let hours = (totalMinutes % (24 * 60)) / 60
     let minutes = totalMinutes % 60
@@ -85,9 +95,13 @@ func calculateUtilization(tokens: Int, limit: Int) -> Int {
     return min(100, tokens * 100 / limit)
 }
 
+func roundedToNearestMinute(_ date: Date) -> Date {
+    Date(timeIntervalSince1970: (date.timeIntervalSince1970 / 60).rounded() * 60)
+}
+
 func formatResetDate(_ date: Date) -> String {
     let formatter = DateFormatter()
     formatter.locale = .current
     formatter.setLocalizedDateFormatFromTemplate("EEEE HH:mm")
-    return formatter.string(from: date)
+    return formatter.string(from: roundedToNearestMinute(date))
 }

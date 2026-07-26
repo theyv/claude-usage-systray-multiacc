@@ -103,6 +103,7 @@ struct SettingsView: View {
 private struct ClaudeWebCredential: Equatable {
     let sessionKey: String
     let organizationID: String
+    let accountFingerprint: String?
 }
 
 enum ClaudeOrganizationsResponseParser {
@@ -113,7 +114,7 @@ enum ClaudeOrganizationsResponseParser {
         }
 
         if let organizations = object as? [[String: Any]] {
-            return organizations.lazy.compactMap { identifier(in: $0) }.first
+            return preferredIdentifier(in: organizations)
         }
 
         guard let dictionary = object as? [String: Any] else { return nil }
@@ -123,7 +124,7 @@ enum ClaudeOrganizationsResponseParser {
 
         for key in ["organizations", "data"] {
             if let organizations = dictionary[key] as? [[String: Any]],
-               let identifier = organizations.lazy.compactMap({ identifier(in: $0) }).first {
+               let identifier = preferredIdentifier(in: organizations) {
                 return identifier
             }
         }
@@ -132,6 +133,17 @@ enum ClaudeOrganizationsResponseParser {
             return identifier(in: organization)
         }
         return nil
+    }
+
+    private static func preferredIdentifier(in organizations: [[String: Any]]) -> String? {
+        let selected = organizations.first(where: { capabilities(in: $0).contains("chat") })
+            ?? organizations.first(where: { capabilities(in: $0) != ["api"] })
+            ?? organizations.first
+        return selected.flatMap { identifier(in: $0) }
+    }
+
+    private static func capabilities(in organization: [String: Any]) -> Set<String> {
+        Set((organization["capabilities"] as? [String] ?? []).map { $0.lowercased() })
     }
 
     private static func identifier(in organization: [String: Any]) -> String? {
@@ -180,7 +192,8 @@ private struct ClaudeWebLoginView: View {
                 try settingsManager.connectWebSession(
                     account,
                     sessionKey: credential.sessionKey,
-                    organizationID: credential.organizationID
+                    organizationID: credential.organizationID,
+                    accountFingerprint: credential.accountFingerprint
                 )
                 usageService.clearRateLimit(for: account.id)
                 usageService.fetchUsage(accounts: settingsManager.accounts)
@@ -315,13 +328,19 @@ private final class ClaudeWebLogin: NSObject, ObservableObject, WKNavigationDele
 
                 let result = try await self.webView.callAsyncJavaScript(
                     """
-                    const response = await fetch("https://claude.ai/api/organizations", {
+                    const options = {
                         credentials: "include",
                         headers: { "Accept": "application/json" }
-                    });
+                    };
+                    const [response, accountResponse] = await Promise.all([
+                        fetch("https://claude.ai/api/organizations", options),
+                        fetch("https://claude.ai/api/account", options)
+                    ]);
                     return JSON.stringify({
                         status: response.status,
-                        body: await response.text()
+                        body: await response.text(),
+                        accountStatus: accountResponse.status,
+                        accountBody: await accountResponse.text()
                     });
                     """,
                     arguments: [:],
@@ -356,7 +375,14 @@ private final class ClaudeWebLogin: NSObject, ObservableObject, WKNavigationDele
         status = "Connected."
         organizationLookupTask = nil
         webView.configuration.websiteDataStore.httpCookieStore.remove(self)
-        credential = ClaudeWebCredential(sessionKey: sessionKey, organizationID: organizationID)
+        let accountFingerprint = (envelope["accountStatus"] as? NSNumber)?.intValue == 200
+            ? (envelope["accountBody"] as? String).flatMap(claudeWebAccountFingerprint)
+            : nil
+        credential = ClaudeWebCredential(
+            sessionKey: sessionKey,
+            organizationID: organizationID,
+            accountFingerprint: accountFingerprint
+        )
     }
 
     private func retryOrganizationLookup(after attempt: Int) {

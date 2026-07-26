@@ -19,7 +19,9 @@ Open **Accounts & settings** in the app, then choose one of these:
 - **Sign in with Claude Code…** — creates an isolated account profile and generates a Claude OAuth sign-in link. Use it once for each account.
 - **Import CCS profiles** — automatically finds accounts managed by [CCS](https://github.com/kaitranntt/ccs).
 
-Tokens stay in the macOS Keychain. They are never committed to this repository.
+OAuth tokens stay in the macOS Keychain. Claude.ai web sessions are kept in a
+user-only local file (`0600`) to avoid repeated Keychain prompts. Credentials
+are never committed to this repository.
 
 ## Notes
 
