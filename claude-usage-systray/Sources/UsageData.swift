@@ -23,14 +23,14 @@ struct ClaudeAccount: Codable, Identifiable, Hashable {
     }
 }
 
-struct UsagePeriod: Hashable {
+struct UsagePeriod: Codable, Hashable {
     let utilization: Int
     let resetsAt: Date?
 
     var remaining: Int { max(0, 100 - utilization) }
 }
 
-struct UsageSnapshot: Hashable {
+struct UsageSnapshot: Codable, Hashable {
     let fiveHour: UsagePeriod
     let sevenDay: UsagePeriod
     let fable: UsagePeriod?

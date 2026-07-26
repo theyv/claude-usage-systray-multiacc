@@ -4,6 +4,20 @@ import CryptoKit
 
 private let accountTokenService = "Claude Usage Systray OAuth"
 
+private enum UsageAPIError: LocalizedError {
+    case rateLimited
+    case httpStatus(Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .rateLimited:
+            return "Rate limited — retrying in about 10 minutes"
+        case .httpStatus(let status):
+            return "Could not fetch usage (HTTP \(status))."
+        }
+    }
+}
+
 func saveAccountToken(_ token: String, for accountID: UUID) throws {
     let query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
@@ -141,10 +155,16 @@ final class UsageService: ObservableObject {
     private var refreshTimer: Timer?
     private let normalInterval: TimeInterval = 3 * 60
     private let rateLimitInterval: TimeInterval = 10 * 60
-    private var retryAfter: Date?
+    private let snapshotCacheKey = "ClaudeUsageCachedSnapshots"
+    private var rateLimitRetryAfter: [UUID: Date] = [:]
     private var cachedTokens: [UUID: String] = [:]
+    private var cachedSnapshots: [UUID: UsageSnapshot]
     var urlSession: URLSession = .shared
-    private init() {}
+
+    private init() {
+        cachedSnapshots = (UserDefaults.standard.data(forKey: snapshotCacheKey))
+            .flatMap { try? JSONDecoder().decode([UUID: UsageSnapshot].self, from: $0) } ?? [:]
+    }
 
     var bestAccount: AccountUsage? {
         accountUsages
@@ -165,37 +185,46 @@ final class UsageService: ObservableObject {
 
     func fetchUsage(accounts: [ClaudeAccount]) {
         guard !isLoading else { return }
-        if let retryAfter, retryAfter > Date() { return }
         isLoading = true
-        let previousUsages = Dictionary(uniqueKeysWithValues: accountUsages.map { ($0.id, $0) })
+        let previousSnapshots = Dictionary(uniqueKeysWithValues: accountUsages.map { ($0.id, $0.snapshot) })
+        let currentRateLimitRetryAfter = rateLimitRetryAfter
         Task {
-            // Anthropic's usage endpoint is sensitive to bursts. Fetching CCS
-            // profiles one at a time prevents a manual refresh from turning all
-            // rows into simultaneous 429 failures.
             var results: [AccountUsage] = []
-            var rateLimited = false
+            var nextRateLimitRetryAfter = currentRateLimitRetryAfter
             for account in accounts {
-                if rateLimited {
-                    results.append(staleUsage(for: account, previous: previousUsages[account.id], error: "Rate limited — retrying later"))
+                if let retryAfter = nextRateLimitRetryAfter[account.id], retryAfter > Date() {
+                    results.append(staleUsage(for: account, previous: previousSnapshots[account.id] ?? cachedSnapshots[account.id], error: UsageAPIError.rateLimited.localizedDescription))
                     continue
                 }
 
-                let result = await fetchUsage(for: account, previous: previousUsages[account.id])
+                let result = await fetchUsage(for: account, previous: previousSnapshots[account.id] ?? cachedSnapshots[account.id])
                 results.append(result)
-                if result.error?.hasPrefix("HTTP 429") == true {
-                    rateLimited = true
+                if result.error == UsageAPIError.rateLimited.localizedDescription {
+                    nextRateLimitRetryAfter[account.id] = Date().addingTimeInterval(rateLimitInterval)
+                } else {
+                    nextRateLimitRetryAfter[account.id] = nil
                 }
-                try? await Task.sleep(nanoseconds: 350_000_000)
+                // Keep requests gentle without letting one account's 429 hide
+                // the state of every other account.
+                try? await Task.sleep(nanoseconds: 750_000_000)
             }
             await MainActor.run {
                 self.accountUsages = results
-                if rateLimited { self.retryAfter = Date().addingTimeInterval(self.rateLimitInterval) }
+                for result in results where result.error == nil && result.hasUsageData {
+                    self.cachedSnapshots[result.id] = result.snapshot
+                }
+                let configuredIDs = Set(accounts.map(\.id))
+                self.cachedSnapshots = self.cachedSnapshots.filter { configuredIDs.contains($0.key) }
+                if let encoded = try? JSONEncoder().encode(self.cachedSnapshots) {
+                    UserDefaults.standard.set(encoded, forKey: self.snapshotCacheKey)
+                }
+                self.rateLimitRetryAfter = nextRateLimitRetryAfter
                 self.isLoading = false
             }
         }
     }
 
-    private func fetchUsage(for account: ClaudeAccount, previous: AccountUsage?) async -> AccountUsage {
+    private func fetchUsage(for account: ClaudeAccount, previous: UsageSnapshot?) async -> AccountUsage {
         do {
             let response = try await fetchOAuthUsage(accessToken: try accessToken(for: account))
             return AccountUsage(account: account, snapshot: UsageSnapshot(fiveHour: response.fiveHour?.asUsagePeriod ?? UsageSnapshot.placeholder.fiveHour, sevenDay: response.sevenDay?.asUsagePeriod ?? UsageSnapshot.placeholder.sevenDay, fable: response.fable ?? response.sevenDaySonnet?.asUsagePeriod, lastUpdated: Date()), error: nil, isStale: false)
@@ -211,9 +240,9 @@ final class UsageService: ObservableObject {
         return token
     }
 
-    private func staleUsage(for account: ClaudeAccount, previous: AccountUsage?, error: String) -> AccountUsage {
-        if let previous, previous.hasUsageData {
-            return AccountUsage(account: account, snapshot: previous.snapshot, error: error, isStale: true)
+    private func staleUsage(for account: ClaudeAccount, previous: UsageSnapshot?, error: String) -> AccountUsage {
+        if let previous, previous.fiveHour.resetsAt != nil || previous.sevenDay.resetsAt != nil {
+            return AccountUsage(account: account, snapshot: previous, error: error, isStale: true)
         }
         return AccountUsage(account: account, snapshot: .placeholder, error: error, isStale: false)
     }
@@ -225,9 +254,8 @@ final class UsageService: ObservableObject {
         let (data, response) = try await urlSession.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         guard http.statusCode == 200 else {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw NSError(domain: "OAuthUsage", code: http.statusCode,
-                          userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode): \(body.prefix(160))"])
+            if http.statusCode == 429 { throw UsageAPIError.rateLimited }
+            throw UsageAPIError.httpStatus(http.statusCode)
         }
         return try JSONDecoder().decode(OAuthUsageResponse.self, from: data)
     }
