@@ -201,6 +201,7 @@ final class UsageService: ObservableObject {
 
     func startPolling(accounts: [ClaudeAccount]) { fetchUsage(accounts: accounts); scheduleTimer() }
     func stopPolling() { refreshTimer?.invalidate(); refreshTimer = nil }
+    func clearRateLimit(for accountID: UUID) { rateLimitRetryAfter[accountID] = nil }
 
     private func scheduleTimer() {
         refreshTimer?.invalidate()

@@ -142,6 +142,7 @@ private struct ClaudeWebLoginView: View {
                     sessionKey: credential.sessionKey,
                     organizationID: credential.organizationID
                 )
+                usageService.clearRateLimit(for: account.id)
                 usageService.fetchUsage(accounts: settingsManager.accounts)
                 dismiss()
             } catch {
@@ -170,7 +171,9 @@ private final class ClaudeWebLogin: NSObject, ObservableObject, WKNavigationDele
 
     lazy var webView: WKWebView = {
         let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .default()
+        // Every account gets a fresh, isolated browser session. Reusing the
+        // default store silently reconnects the account logged in previously.
+        configuration.websiteDataStore = .nonPersistent()
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = self
         view.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"

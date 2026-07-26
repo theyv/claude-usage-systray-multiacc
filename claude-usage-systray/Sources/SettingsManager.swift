@@ -16,6 +16,7 @@ final class SettingsManager: ObservableObject {
         settings = (defaults.data(forKey: settingsKey)).flatMap { try? JSONDecoder().decode(AppSettings.self, from: $0) } ?? AppSettings()
         accounts = (defaults.data(forKey: accountsKey)).flatMap { try? JSONDecoder().decode([ClaudeAccount].self, from: $0) } ?? []
         ignoredCCSProfiles = Set(defaults.stringArray(forKey: ignoredCCSProfilesKey) ?? [])
+        removeDuplicateWebSessions()
     }
 
     func addAccount(name: String, token: String) throws {
@@ -78,6 +79,15 @@ final class SettingsManager: ObservableObject {
 
     func connectWebSession(_ account: ClaudeAccount, sessionKey: String, organizationID: String) throws {
         guard let index = accounts.firstIndex(of: account) else { return }
+        if let duplicate = accounts.first(where: {
+            $0.id != account.id && $0.webOrganizationID == organizationID
+        }) {
+            throw NSError(
+                domain: "ClaudeWebSession",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "This Claude.ai account is already connected as \(duplicate.name)."]
+            )
+        }
         try saveWebSessionKey(sessionKey, for: account.id)
         accounts[index].webOrganizationID = organizationID
     }
@@ -101,5 +111,18 @@ final class SettingsManager: ObservableObject {
 
     private func saveAccounts() {
         if let encoded = try? JSONEncoder().encode(accounts) { defaults.set(encoded, forKey: accountsKey) }
+    }
+
+    private func removeDuplicateWebSessions() {
+        var seenOrganizations = Set<String>()
+        for index in accounts.indices {
+            guard let organizationID = accounts[index].webOrganizationID else { continue }
+            if seenOrganizations.contains(organizationID) {
+                deleteWebSessionKey(for: accounts[index].id)
+                accounts[index].webOrganizationID = nil
+            } else {
+                seenOrganizations.insert(organizationID)
+            }
+        }
     }
 }
