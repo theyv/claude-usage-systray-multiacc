@@ -245,7 +245,7 @@ private func parseISO8601(_ value: String) -> Date? {
     return formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
 }
 
-func claudeWebAccountFingerprint(from text: String) -> String? {
+private func claudeWebAccountEmail(from text: String) -> String? {
     struct AccountResponse: Decodable {
         let emailAddress: String?
         enum CodingKeys: String, CodingKey { case emailAddress = "email_address" }
@@ -259,9 +259,26 @@ func claudeWebAccountFingerprint(from text: String) -> String? {
           !normalizedEmail.isEmpty else {
         return nil
     }
-    return SHA256.hash(data: Data(normalizedEmail.utf8))
+    return normalizedEmail
+}
+
+func claudeWebAccountFingerprint(from text: String) -> String? {
+    guard let email = claudeWebAccountEmail(from: text) else { return nil }
+    return SHA256.hash(data: Data(email.utf8))
         .map { String(format: "%02x", $0) }
         .joined()
+}
+
+/// A display-only hint (`p***@example.com`) so a person can confirm which
+/// Claude.ai account a login window reached. Deliberately lossy, shown once in
+/// that window, and never persisted or written to a log.
+func claudeWebAccountMaskedEmail(from text: String) -> String? {
+    guard let email = claudeWebAccountEmail(from: text),
+          let separator = email.firstIndex(of: "@"),
+          separator != email.startIndex else { return nil }
+    let domain = email[email.index(after: separator)...]
+    guard !domain.isEmpty else { return nil }
+    return "\(email[email.startIndex])***@\(domain)"
 }
 
 final class UsageService: ObservableObject {
@@ -272,14 +289,18 @@ final class UsageService: ObservableObject {
     private var refreshTimer: Timer?
     private let normalInterval: TimeInterval = 3 * 60
     private let rateLimitInterval: TimeInterval = 10 * 60
-    private let snapshotCacheKey = "ClaudeUsageCachedSnapshots"
+    private static let snapshotCacheKey = "ClaudeUsageCachedSnapshots"
     private var rateLimitRetryAfter: [UUID: Date] = [:]
     private var cachedTokens: [UUID: String] = [:]
     private var cachedSnapshots: [UUID: UsageSnapshot]
     var urlSession: URLSession = .shared
 
     private init() {
-        cachedSnapshots = (UserDefaults.standard.data(forKey: snapshotCacheKey))
+        cachedSnapshots = UsageService.loadCachedSnapshots()
+    }
+
+    static func loadCachedSnapshots() -> [UUID: UsageSnapshot] {
+        (UserDefaults.standard.data(forKey: snapshotCacheKey))
             .flatMap { try? JSONDecoder().decode([UUID: UsageSnapshot].self, from: $0) } ?? [:]
     }
 
@@ -332,7 +353,7 @@ final class UsageService: ObservableObject {
                     results.append(staleUsage(
                         for: account,
                         previous: lastKnownSnapshot,
-                        error: "Same Claude.ai login as \(canonicalAccount.name) — reconnect this profile."
+                        error: WebUsageError.duplicateLogin(canonicalAccount.name).localizedDescription
                     ))
                     continue
                 }
@@ -356,7 +377,7 @@ final class UsageService: ObservableObject {
                 let configuredIDs = Set(accounts.map(\.id))
                 self.cachedSnapshots = self.cachedSnapshots.filter { configuredIDs.contains($0.key) }
                 if let encoded = try? JSONEncoder().encode(self.cachedSnapshots) {
-                    UserDefaults.standard.set(encoded, forKey: self.snapshotCacheKey)
+                    UserDefaults.standard.set(encoded, forKey: Self.snapshotCacheKey)
                 }
                 self.rateLimitRetryAfter = nextRateLimitRetryAfter
                 self.isLoading = false
@@ -369,18 +390,19 @@ final class UsageService: ObservableObject {
             let response: OAuthUsageResponse
             if let organizationID = account.webOrganizationID {
                 let webResult = try await WebUsageFetcher.shared.fetchUsage(
+                    accountID: account.id,
                     sessionKey: readWebSessionKey(for: account.id),
                     organizationID: organizationID
                 )
                 response = webResult.usage
-                if let fingerprint = webResult.accountFingerprint,
-                   fingerprint != account.webAccountFingerprint {
-                    await MainActor.run {
-                        SettingsManager.shared.setWebAccountFingerprint(
-                            fingerprint,
-                            for: account.id
-                        )
+                // The refresh runs in this account's own browser profile, so the
+                // identity it reports is authoritative — but it must not land on
+                // a profile that another login already owns.
+                if let fingerprint = webResult.accountFingerprint {
+                    let conflict = await MainActor.run {
+                        SettingsManager.shared.claimWebAccountIdentity(fingerprint, for: account.id)
                     }
+                    if let conflict { throw WebUsageError.duplicateLogin(conflict) }
                 }
             } else {
                 response = try await fetchOAuthUsage(accessToken: try accessToken(for: account))
@@ -423,6 +445,7 @@ private enum WebUsageError: LocalizedError {
     case busy
     case invalidResponse
     case sessionExpired
+    case duplicateLogin(String)
     case httpStatus(Int)
 
     var errorDescription: String? {
@@ -433,6 +456,8 @@ private enum WebUsageError: LocalizedError {
             return "Claude.ai returned an unexpected response."
         case .sessionExpired:
             return "Claude.ai session expired — reconnect this account in Settings."
+        case .duplicateLogin(let accountName):
+            return "Same Claude.ai login as \(accountName) — reconnect this profile."
         case .httpStatus(let status):
             return "Could not fetch Claude.ai usage (HTTP \(status))."
         }
@@ -453,38 +478,42 @@ private final class WebUsageFetcher: NSObject, WKNavigationDelegate {
 
     private var continuation: CheckedContinuation<WebUsageFetchResult, Error>?
     private var webView: WKWebView?
+    private var isFetching = false
 
-    func fetchUsage(sessionKey: String, organizationID: String) async throws -> WebUsageFetchResult {
-        guard continuation == nil else { throw WebUsageError.busy }
+    /// Refreshes one account inside that account's own browser profile. Nothing
+    /// is read from or written to a store shared with another account, and the
+    /// only claude.ai session cookie present is this account's.
+    func fetchUsage(
+        accountID: UUID,
+        sessionKey: String,
+        organizationID: String
+    ) async throws -> WebUsageFetchResult {
+        guard !isFetching else { throw WebUsageError.busy }
+        isFetching = true
+
+        guard let url = URL(string: "https://claude.ai/api/organizations/\(organizationID)/usage") else {
+            isFetching = false
+            throw WebUsageError.invalidResponse
+        }
+
+        let dataStore = ClaudeWebProfileStore.store(for: accountID)
+        do {
+            try await ClaudeWebProfileStore.installOnlySessionCookie(sessionKey, in: dataStore)
+        } catch {
+            isFetching = false
+            throw error
+        }
 
         return try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation
 
             let configuration = WKWebViewConfiguration()
-            configuration.websiteDataStore = .default()
+            configuration.websiteDataStore = dataStore
             let webView = WKWebView(frame: .zero, configuration: configuration)
             webView.navigationDelegate = self
             webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
             self.webView = webView
-
-            guard let cookie = HTTPCookie(properties: [
-                .domain: ".claude.ai",
-                .path: "/",
-                .name: "sessionKey",
-                .value: sessionKey,
-                .secure: "TRUE"
-            ]) else {
-                finish(.failure(WebUsageError.invalidResponse))
-                return
-            }
-
-            configuration.websiteDataStore.httpCookieStore.setCookie(cookie) {
-                guard let url = URL(string: "https://claude.ai/api/organizations/\(organizationID)/usage") else {
-                    self.finish(.failure(WebUsageError.invalidResponse))
-                    return
-                }
-                webView.load(URLRequest(url: url))
-            }
+            webView.load(URLRequest(url: url))
         }
     }
 
@@ -565,6 +594,7 @@ private final class WebUsageFetcher: NSObject, WKNavigationDelegate {
     private func finish(_ result: Result<WebUsageFetchResult, Error>) {
         guard let continuation else { return }
         self.continuation = nil
+        isFetching = false
         webView?.navigationDelegate = nil
         webView?.stopLoading()
         webView = nil

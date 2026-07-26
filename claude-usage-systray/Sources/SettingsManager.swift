@@ -10,12 +10,22 @@ final class SettingsManager: ObservableObject {
     private let settingsKey = "ClaudeUsageSettings"
     private let accountsKey = "ClaudeUsageAccounts"
     private let ignoredCCSProfilesKey = "ClaudeUsageIgnoredCCSProfiles"
+    private let didRepairSharedIdentitiesKey = "ClaudeUsageDidRepairSharedWebIdentities"
     private var ignoredCCSProfiles: Set<String>
 
     private init() {
         settings = (defaults.data(forKey: settingsKey)).flatMap { try? JSONDecoder().decode(AppSettings.self, from: $0) } ?? AppSettings()
-        accounts = (defaults.data(forKey: accountsKey)).flatMap { try? JSONDecoder().decode([ClaudeAccount].self, from: $0) } ?? []
+        let storedAccounts = (defaults.data(forKey: accountsKey)).flatMap { try? JSONDecoder().decode([ClaudeAccount].self, from: $0) } ?? []
+        if defaults.bool(forKey: didRepairSharedIdentitiesKey) {
+            accounts = storedAccounts
+        } else {
+            // Identities recorded by a shared-cookie build cannot be trusted.
+            accounts = ClaudeWebIdentity.clearingDuplicateIdentities(in: storedAccounts)
+            defaults.set(true, forKey: didRepairSharedIdentitiesKey)
+        }
         ignoredCCSProfiles = Set(defaults.stringArray(forKey: ignoredCCSProfilesKey) ?? [])
+        // Assignments made during init skip the observer that persists them.
+        if accounts != storedAccounts { saveAccounts() }
     }
 
     func addAccount(name: String, token: String) throws {
@@ -64,6 +74,7 @@ final class SettingsManager: ObservableObject {
     func removeAccount(_ account: ClaudeAccount) {
         deleteAccountToken(for: account.id)
         deleteWebSessionKey(for: account.id)
+        Task { @MainActor in await ClaudeWebProfileStore.forget(account.id) }
         if let ccsCredentialsPath = account.ccsCredentialsPath {
             ignoredCCSProfiles.insert(ccsCredentialsPath)
             defaults.set(Array(ignoredCCSProfiles), forKey: ignoredCCSProfilesKey)
@@ -76,44 +87,43 @@ final class SettingsManager: ObservableObject {
         accounts[index].name = name.isEmpty ? account.name : name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// A confirmed identity is required: without it two profiles could hold the
+    /// same login and report the same usage, which is exactly what the
+    /// fingerprint exists to prevent.
     func connectWebSession(
         _ account: ClaudeAccount,
         sessionKey: String,
         organizationID: String,
-        accountFingerprint: String?
+        accountFingerprint: String
     ) throws {
         guard let index = accounts.firstIndex(of: account) else { return }
-        if let accountFingerprint,
-           let duplicate = accounts.first(where: {
-               $0.id != account.id && $0.webAccountFingerprint == accountFingerprint
-           }) {
-            throw NSError(
-                domain: "ClaudeWebSession",
-                code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "This Claude.ai account is already connected as \(duplicate.name)."]
-            )
-        }
-        if let duplicate = accounts.first(where: { candidate in
-            guard candidate.id != account.id,
-                  candidate.webOrganizationID != nil,
-                  let existingSessionKey = try? readWebSessionKey(for: candidate.id) else { return false }
-            return existingSessionKey == sessionKey
-        }) {
-            throw NSError(
-                domain: "ClaudeWebSession",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "This Claude.ai account is already connected as \(duplicate.name)."]
-            )
+        if let duplicate = ClaudeWebIdentity.conflictingAccountName(
+            for: accountFingerprint,
+            in: accounts,
+            excluding: account.id
+        ) {
+            throw ClaudeWebSessionError.alreadyConnected(duplicate)
         }
         try saveWebSessionKey(sessionKey, for: account.id)
         accounts[index].webOrganizationID = organizationID
         accounts[index].webAccountFingerprint = accountFingerprint
     }
 
-    func setWebAccountFingerprint(_ fingerprint: String, for accountID: UUID) {
+    /// Records which Claude.ai login a profile refreshes. Returns the name of the
+    /// profile that already owns that login, if any, so the caller can report it
+    /// instead of letting two profiles quietly share one account.
+    func claimWebAccountIdentity(_ fingerprint: String, for accountID: UUID) -> String? {
+        if let conflict = ClaudeWebIdentity.conflictingAccountName(
+            for: fingerprint,
+            in: accounts,
+            excluding: accountID
+        ) {
+            return conflict
+        }
         guard let index = accounts.firstIndex(where: { $0.id == accountID }),
-              accounts[index].webAccountFingerprint != fingerprint else { return }
+              accounts[index].webAccountFingerprint != fingerprint else { return nil }
         accounts[index].webAccountFingerprint = fingerprint
+        return nil
     }
 
     func moveAccount(_ account: ClaudeAccount, by offset: Int) {

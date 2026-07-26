@@ -19,9 +19,25 @@ Open **Accounts & settings** in the app, then choose one of these:
 - **Sign in with Claude Code…** — creates an isolated account profile and generates a Claude OAuth sign-in link. Use it once for each account.
 - **Import CCS profiles** — automatically finds accounts managed by [CCS](https://github.com/kaitranntt/ccs).
 
+Each account also gets its own isolated browser profile, so one Claude.ai login
+cannot answer for another account. A login only completes once Claude confirms
+which account signed in, and connecting the same login twice is rejected.
+
 OAuth tokens stay in the macOS Keychain. Claude.ai web sessions are kept in a
-user-only local file (`0600`) to avoid repeated Keychain prompts. Credentials
-are never committed to this repository.
+user-only local file (`0600`) to avoid repeated Keychain prompts. Only a hash of
+the account address is stored, never the address itself. Credentials are never
+committed to this repository.
+
+## Diagnose account problems
+
+```bash
+/Applications/ClaudeUsageSystray.app/Contents/MacOS/ClaudeUsageSystray --diagnose
+```
+
+Prints an anonymized report — per-account position, whether a session is stored,
+and group letters showing which profiles share a session, organization, or
+login. It contains no cookies, tokens, addresses, or organization identifiers, so
+it is safe to paste into an issue.
 
 ## Notes
 

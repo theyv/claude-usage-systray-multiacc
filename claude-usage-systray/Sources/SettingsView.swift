@@ -103,7 +103,7 @@ struct SettingsView: View {
 private struct ClaudeWebCredential: Equatable {
     let sessionKey: String
     let organizationID: String
-    let accountFingerprint: String?
+    let accountFingerprint: String
 }
 
 enum ClaudeOrganizationsResponseParser {
@@ -161,8 +161,16 @@ private struct ClaudeWebLoginView: View {
     @ObservedObject var settingsManager: SettingsManager
     @ObservedObject var usageService: UsageService
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var login = ClaudeWebLogin()
+    @StateObject private var login: ClaudeWebLogin
     @State private var saveError: String?
+
+    init(account: ClaudeAccount, settingsManager: SettingsManager, usageService: UsageService) {
+        self.account = account
+        _settingsManager = ObservedObject(wrappedValue: settingsManager)
+        _usageService = ObservedObject(wrappedValue: usageService)
+        // The login window is bound to one account, so its browser profile is too.
+        _login = StateObject(wrappedValue: ClaudeWebLogin(accountID: account.id))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -170,6 +178,10 @@ private struct ClaudeWebLoginView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Connect \(account.name) to Claude.ai").font(.headline)
                     Text(login.status).font(.caption).foregroundColor(.secondary)
+                    if let maskedIdentity = login.maskedIdentity {
+                        Text("Connected account: \(maskedIdentity)")
+                            .font(.caption).foregroundColor(.secondary)
+                    }
                 }
                 Spacer()
                 Button("Use current session") { login.captureCurrentSession() }
@@ -195,11 +207,13 @@ private struct ClaudeWebLoginView: View {
                     organizationID: credential.organizationID,
                     accountFingerprint: credential.accountFingerprint
                 )
+                saveError = nil
                 usageService.clearRateLimit(for: account.id)
                 usageService.fetchUsage(accounts: settingsManager.accounts)
                 dismiss()
             } catch {
                 saveError = error.localizedDescription
+                login.reportSaveFailure()
             }
         }
     }
@@ -217,18 +231,28 @@ private final class ClaudeWebLogin: NSObject, ObservableObject, WKNavigationDele
     @Published private(set) var status = "Preparing Claude.ai login…"
     @Published private(set) var credential: ClaudeWebCredential?
     @Published private(set) var error: String?
+    /// Shown so the person can see which account this window reached. Display
+    /// only — never stored and never logged.
+    @Published private(set) var maskedIdentity: String?
 
-    private enum Stage { case idle, signingIn, findingOrganization, complete }
+    private enum Stage { case idle, preparing, signingIn, findingAccount, complete }
+    private let accountID: UUID
     private var stage = Stage.idle
     private var capturedSessionKey: String?
-    private var organizationLookupTask: Task<Void, Never>?
-    private let organizationLookupDelays: [UInt64] = [1, 2, 4, 8, 12, 15]
+    private var accountLookupTask: Task<Void, Never>?
+    private let accountLookupDelays: [UInt64] = [1, 2, 4, 8, 12, 15]
+
+    init(accountID: UUID) {
+        self.accountID = accountID
+        super.init()
+    }
 
     lazy var webView: WKWebView = {
         let configuration = WKWebViewConfiguration()
-        // Every account gets a fresh, isolated browser session. Reusing the
-        // default store silently reconnects the account logged in previously.
-        configuration.websiteDataStore = .nonPersistent()
+        // This account's own browser profile: signing in here cannot inherit
+        // another account's session, and the clearance earned while signing in
+        // carries over to this account's usage refreshes.
+        configuration.websiteDataStore = ClaudeWebProfileStore.store(for: accountID)
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = self
         view.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
@@ -238,27 +262,24 @@ private final class ClaudeWebLogin: NSObject, ObservableObject, WKNavigationDele
     func start() {
         guard stage == .idle else { return }
         error = nil
-        let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
-        cookieStore.getAllCookies { cookies in
-            let sessionCookies = cookies.filter { $0.name == "sessionKey" && $0.domain.contains("claude.ai") }
-            let group = DispatchGroup()
-            for cookie in sessionCookies {
-                group.enter()
-                cookieStore.delete(cookie) { group.leave() }
-            }
-            group.notify(queue: .main) {
-                cookieStore.add(self)
-                self.stage = .signingIn
-                self.status = "Sign in normally. The window will close automatically when connected."
-                self.webView.load(URLRequest(url: URL(string: "https://claude.ai/login")!))
-            }
+        stage = .preparing
+        status = "Preparing a private Claude.ai window…"
+        Task {
+            // Emptying the profile first is what makes a re-login land on the
+            // account the person actually signs in as.
+            await ClaudeWebProfileStore.removeAllData(for: accountID)
+            guard stage == .preparing else { return }
+            webView.configuration.websiteDataStore.httpCookieStore.add(self)
+            stage = .signingIn
+            status = "Sign in normally. The window will close automatically when connected."
+            webView.load(URLRequest(url: URL(string: "https://claude.ai/login")!))
         }
     }
 
     func cancel() {
         stage = .idle
-        organizationLookupTask?.cancel()
-        organizationLookupTask = nil
+        accountLookupTask?.cancel()
+        accountLookupTask = nil
         webView.configuration.websiteDataStore.httpCookieStore.remove(self)
         webView.stopLoading()
     }
@@ -269,18 +290,18 @@ private final class ClaudeWebLogin: NSObject, ObservableObject, WKNavigationDele
     }
 
     func captureCurrentSession(showError: Bool = true) {
-        if stage == .findingOrganization, capturedSessionKey != nil {
+        if stage == .findingAccount, capturedSessionKey != nil {
             error = nil
-            scheduleOrganizationLookup(attempt: 0)
+            scheduleAccountLookup(attempt: 0)
             return
         }
         guard stage == .signingIn else { return }
         let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
         cookieStore.getAllCookies { cookies in
             guard self.stage == .signingIn,
-                  let sessionKey = cookies.first(where: {
-                      $0.name == "sessionKey" && $0.domain.contains("claude.ai")
-                  })?.value else {
+                  let sessionKey = ClaudeWebCookies
+                    .sessionCookies(in: cookies)
+                    .first?.value else {
                 if showError {
                     self.error = "No Claude.ai session cookie found yet. Finish signing in, then try again."
                 }
@@ -288,10 +309,19 @@ private final class ClaudeWebLogin: NSObject, ObservableObject, WKNavigationDele
             }
             self.error = nil
             self.capturedSessionKey = sessionKey
-            self.stage = .findingOrganization
-            self.status = "Login complete. Finding your Claude organization…"
-            self.scheduleOrganizationLookup(attempt: 0)
+            self.stage = .findingAccount
+            self.status = "Login complete. Confirming which Claude account this is…"
+            self.scheduleAccountLookup(attempt: 0)
         }
+    }
+
+    /// Called when saving the credential failed, so the window stays usable and
+    /// the person can retry after fixing the cause. The credential is released so
+    /// a retry publishes a change the view will act on.
+    func reportSaveFailure() {
+        credential = nil
+        stage = .findingAccount
+        status = "This profile was left unchanged."
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -309,22 +339,22 @@ private final class ClaudeWebLogin: NSObject, ObservableObject, WKNavigationDele
         status = "Could not connect this account."
     }
 
-    private func scheduleOrganizationLookup(attempt: Int) {
-        guard stage == .findingOrganization,
-              organizationLookupDelays.indices.contains(attempt) else { return }
+    private func scheduleAccountLookup(attempt: Int) {
+        guard stage == .findingAccount,
+              accountLookupDelays.indices.contains(attempt) else { return }
 
-        organizationLookupTask?.cancel()
-        let delay = organizationLookupDelays[attempt]
+        accountLookupTask?.cancel()
+        let delay = accountLookupDelays[attempt]
         status = attempt == 0
-            ? "Login complete. Finding your Claude organization…"
+            ? "Login complete. Confirming which Claude account this is…"
             : "Claude is still preparing the account. Retrying automatically…"
 
-        organizationLookupTask = Task { [weak self] in
+        accountLookupTask = Task { [weak self] in
             guard let self else { return }
             do {
                 try await Task.sleep(nanoseconds: delay * 1_000_000_000)
                 try Task.checkCancellation()
-                guard self.stage == .findingOrganization else { return }
+                guard self.stage == .findingAccount else { return }
 
                 let result = try await self.webView.callAsyncJavaScript(
                     """
@@ -348,36 +378,43 @@ private final class ClaudeWebLogin: NSObject, ObservableObject, WKNavigationDele
                     contentWorld: .page
                 )
                 try Task.checkCancellation()
-                self.handleOrganizationLookupResult(result, attempt: attempt)
+                self.handleAccountLookupResult(result, attempt: attempt)
             } catch is CancellationError {
                 return
             } catch {
-                self.retryOrganizationLookup(after: attempt)
+                self.retryAccountLookup(after: attempt, missingIdentity: false)
             }
         }
     }
 
-    private func handleOrganizationLookupResult(_ result: Any?, attempt: Int) {
-        guard stage == .findingOrganization,
+    /// A login only completes once Claude confirms both the organization and the
+    /// identity behind this session. Saving a session whose account is unknown is
+    /// what previously let one login be stored under several profiles.
+    private func handleAccountLookupResult(_ result: Any?, attempt: Int) {
+        guard stage == .findingAccount,
               let payload = result as? String,
               let payloadData = payload.data(using: .utf8),
               let envelope = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
-              let statusCode = (envelope["status"] as? NSNumber)?.intValue,
-              statusCode == 200,
+              (envelope["status"] as? NSNumber)?.intValue == 200,
               let body = envelope["body"] as? String,
               let organizationID = ClaudeOrganizationsResponseParser.firstOrganizationID(from: body),
               let sessionKey = capturedSessionKey else {
-            retryOrganizationLookup(after: attempt)
+            retryAccountLookup(after: attempt, missingIdentity: false)
+            return
+        }
+
+        guard (envelope["accountStatus"] as? NSNumber)?.intValue == 200,
+              let accountBody = envelope["accountBody"] as? String,
+              let accountFingerprint = claudeWebAccountFingerprint(from: accountBody) else {
+            retryAccountLookup(after: attempt, missingIdentity: true)
             return
         }
 
         stage = .complete
         status = "Connected."
-        organizationLookupTask = nil
+        accountLookupTask = nil
         webView.configuration.websiteDataStore.httpCookieStore.remove(self)
-        let accountFingerprint = (envelope["accountStatus"] as? NSNumber)?.intValue == 200
-            ? (envelope["accountBody"] as? String).flatMap(claudeWebAccountFingerprint)
-            : nil
+        maskedIdentity = claudeWebAccountMaskedEmail(from: accountBody)
         credential = ClaudeWebCredential(
             sessionKey: sessionKey,
             organizationID: organizationID,
@@ -385,16 +422,18 @@ private final class ClaudeWebLogin: NSObject, ObservableObject, WKNavigationDele
         )
     }
 
-    private func retryOrganizationLookup(after attempt: Int) {
+    private func retryAccountLookup(after attempt: Int, missingIdentity: Bool) {
         let nextAttempt = attempt + 1
-        if organizationLookupDelays.indices.contains(nextAttempt) {
-            scheduleOrganizationLookup(attempt: nextAttempt)
+        if accountLookupDelays.indices.contains(nextAttempt) {
+            scheduleAccountLookup(attempt: nextAttempt)
             return
         }
 
-        organizationLookupTask = nil
-        status = "Signed in, but Claude has not exposed the account yet."
-        error = "Keep this window open and click “Use current session” to retry."
+        accountLookupTask = nil
+        status = missingIdentity
+            ? "Signed in, but Claude has not confirmed which account this is."
+            : "Signed in, but Claude has not exposed the account yet."
+        error = "Nothing was saved. Keep this window open and click “Use current session” to retry."
     }
 }
 

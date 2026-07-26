@@ -17,6 +17,8 @@
 		CA4C19637A5CD709F1C57EDA /* UsageServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CF92A3018305AA026317454 /* UsageServiceTests.swift */; };
 		F25EDEE38ABF1A0E15C849DC /* SettingsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C024067E6D3F865AF198511C /* SettingsManager.swift */; };
 		F6263675C12E1B942E3CD6AF /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DA6F91F4720B31FB4CA872B9 /* Security.framework */; };
+		A1C0DE01B7E24F1A9C3D0001 /* ClaudeWebSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C0DE01B7E24F1A9C3D0002 /* ClaudeWebSession.swift */; };
+		A1C0DE01B7E24F1A9C3D0003 /* Diagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C0DE01B7E24F1A9C3D0004 /* Diagnostics.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -44,6 +46,8 @@
 		DE78D81A249AA2CBF9D9C9CB /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		DEE554A7DA6DDC77A08A3EEE /* UsageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageService.swift; sourceTree = "<group>"; };
 		F35CDB3DFFFBEE4CE3F0D52E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		A1C0DE01B7E24F1A9C3D0002 /* ClaudeWebSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeWebSession.swift; sourceTree = "<group>"; };
+		A1C0DE01B7E24F1A9C3D0004 /* Diagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Diagnostics.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -114,6 +118,8 @@
 				B1107FB82A3A3C9FC04B4F35 /* SettingsView.swift */,
 				32234A82B1C94CCB6F3763AE /* UsageData.swift */,
 				DEE554A7DA6DDC77A08A3EEE /* UsageService.swift */,
+				A1C0DE01B7E24F1A9C3D0004 /* Diagnostics.swift */,
+				A1C0DE01B7E24F1A9C3D0002 /* ClaudeWebSession.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -223,6 +229,8 @@
 				80E1131433C5BE35E6CF65E4 /* UsageData.swift in Sources */,
 				354CBABB4F867F1E95A9A01E /* UsageService.swift in Sources */,
 				477DC01AB2A27BF9535464A1 /* main.swift in Sources */,
+				A1C0DE01B7E24F1A9C3D0003 /* Diagnostics.swift in Sources */,
+				A1C0DE01B7E24F1A9C3D0001 /* ClaudeWebSession.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -311,7 +319,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 13;
 				DEVELOPMENT_TEAM = AHGFV6BL8B;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = Resources/Info.plist;
@@ -322,7 +330,7 @@
 					"@executable_path/../Frameworks",
 				);
 				LSUIElement = YES;
-				MARKETING_VERSION = 1.2.6;
+				MARKETING_VERSION = 1.2.7;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.adntgv.claude-usage-systray";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
@@ -396,7 +404,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 13;
 				DEVELOPMENT_TEAM = AHGFV6BL8B;
 				INFOPLIST_FILE = Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Claude Usage Systray";
@@ -406,7 +414,7 @@
 					"@executable_path/../Frameworks",
 				);
 				LSUIElement = YES;
-				MARKETING_VERSION = 1.2.6;
+				MARKETING_VERSION = 1.2.7;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.adntgv.claude-usage-systray";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;

@@ -189,6 +189,198 @@ final class ClaudeWebAccountFingerprintTests: XCTestCase {
         XCTAssertNil(claudeWebAccountFingerprint(from: #"{"memberships":[]}"#))
         XCTAssertNil(claudeWebAccountFingerprint(from: "invalid"))
     }
+
+    func testMaskedEmailKeepsOnlyTheFirstCharacterAndDomain() {
+        XCTAssertEqual(
+            claudeWebAccountMaskedEmail(from: #"{"email_address":"Person@Example.com"}"#),
+            "p***@example.com"
+        )
+    }
+
+    func testMaskedEmailRejectsUnusableAddresses() {
+        XCTAssertNil(claudeWebAccountMaskedEmail(from: #"{"email_address":"@example.com"}"#))
+        XCTAssertNil(claudeWebAccountMaskedEmail(from: #"{"email_address":"person@"}"#))
+        XCTAssertNil(claudeWebAccountMaskedEmail(from: #"{"memberships":[]}"#))
+    }
+}
+
+// MARK: - Per-account session isolation
+
+final class ClaudeWebCookiesTests: XCTestCase {
+
+    private func cookie(name: String, domain: String, value: String = "value") -> HTTPCookie {
+        HTTPCookie(properties: [
+            .domain: domain, .path: "/", .name: name, .value: value, .secure: "TRUE"
+        ])!
+    }
+
+    func testSelectsSessionCookiesInEveryDomainFormClaudeUses() {
+        // claude.ai answers with a host-only cookie of its own, so both forms
+        // have to go before another account's session is installed.
+        let cookies = [
+            cookie(name: "sessionKey", domain: "claude.ai"),
+            cookie(name: "sessionKey", domain: ".claude.ai"),
+            cookie(name: "sessionKey", domain: "app.claude.ai")
+        ]
+        XCTAssertEqual(ClaudeWebCookies.sessionCookies(in: cookies).count, 3)
+    }
+
+    func testLeavesUnrelatedCookiesAlone() {
+        let cookies = [
+            cookie(name: "lastActiveOrg", domain: ".claude.ai"),
+            cookie(name: "__cf_bm", domain: ".claude.ai"),
+            cookie(name: "sessionKey", domain: ".example.com")
+        ]
+        XCTAssertTrue(ClaudeWebCookies.sessionCookies(in: cookies).isEmpty)
+    }
+
+    func testInstalledSessionCookieIsScopedToClaudeAndSecure() throws {
+        let cookie = try XCTUnwrap(ClaudeWebCookies.sessionCookie(value: "session-value"))
+        XCTAssertEqual(cookie.name, "sessionKey")
+        XCTAssertEqual(cookie.domain, ".claude.ai")
+        XCTAssertEqual(cookie.path, "/")
+        XCTAssertTrue(cookie.isSecure)
+        XCTAssertTrue(ClaudeWebCookies.isSessionCookie(cookie))
+    }
+}
+
+final class ClaudeWebIdentityTests: XCTestCase {
+
+    func testFindsTheProfileThatAlreadyOwnsALogin() {
+        let mine = ClaudeAccount(name: "Second", webAccountFingerprint: nil)
+        let theirs = ClaudeAccount(name: "First", webAccountFingerprint: "fingerprint-a")
+
+        XCTAssertEqual(
+            ClaudeWebIdentity.conflictingAccountName(
+                for: "fingerprint-a", in: [theirs, mine], excluding: mine.id
+            ),
+            "First"
+        )
+    }
+
+    func testReconnectingTheSameProfileIsNotAConflict() {
+        let account = ClaudeAccount(name: "First", webAccountFingerprint: "fingerprint-a")
+
+        XCTAssertNil(
+            ClaudeWebIdentity.conflictingAccountName(
+                for: "fingerprint-a", in: [account], excluding: account.id
+            )
+        )
+    }
+
+    func testDistinctLoginsDoNotConflict() {
+        let first = ClaudeAccount(name: "First", webAccountFingerprint: "fingerprint-a")
+        let second = ClaudeAccount(name: "Second", webAccountFingerprint: "fingerprint-b")
+
+        XCTAssertNil(
+            ClaudeWebIdentity.conflictingAccountName(
+                for: "fingerprint-b", in: [first, second], excluding: second.id
+            )
+        )
+    }
+
+    func testDropsIdentitiesRecordedOnSeveralProfiles() {
+        let accounts = [
+            ClaudeAccount(name: "First", webOrganizationID: "org", webAccountFingerprint: "shared"),
+            ClaudeAccount(name: "Second", webOrganizationID: "org", webAccountFingerprint: "shared"),
+            ClaudeAccount(name: "Third", webOrganizationID: "org", webAccountFingerprint: "own")
+        ]
+
+        let repaired = ClaudeWebIdentity.clearingDuplicateIdentities(in: accounts)
+
+        XCTAssertNil(repaired[0].webAccountFingerprint)
+        XCTAssertNil(repaired[1].webAccountFingerprint)
+        XCTAssertEqual(repaired[2].webAccountFingerprint, "own")
+        // Sessions and organizations survive; only the untrustworthy identity goes.
+        XCTAssertEqual(repaired.map(\.id), accounts.map(\.id))
+        XCTAssertEqual(repaired.compactMap(\.webOrganizationID).count, 3)
+    }
+
+    func testLeavesSoundIdentitiesUntouched() {
+        let accounts = [
+            ClaudeAccount(name: "First", webAccountFingerprint: "a"),
+            ClaudeAccount(name: "Second", webAccountFingerprint: "b"),
+            ClaudeAccount(name: "Third", webAccountFingerprint: nil)
+        ]
+
+        XCTAssertEqual(
+            ClaudeWebIdentity.clearingDuplicateIdentities(in: accounts).map(\.webAccountFingerprint),
+            ["a", "b", nil]
+        )
+    }
+}
+
+// MARK: - Diagnostics
+
+final class ClaudeUsageDiagnosticsTests: XCTestCase {
+
+    private let organizationID = "11111111-2222-3333-4444-555555555555"
+
+    private func input() -> ClaudeUsageDiagnostics.Input {
+        let first = ClaudeAccount(
+            name: "First", webOrganizationID: organizationID, webAccountFingerprint: "fingerprint-a"
+        )
+        let second = ClaudeAccount(
+            name: "Second", webOrganizationID: organizationID, webAccountFingerprint: "fingerprint-b"
+        )
+        return ClaudeUsageDiagnostics.Input(
+            accounts: [first, second],
+            sessionKeys: [first.id: "session-secret-a", second.id: "session-secret-b"],
+            snapshots: [
+                first.id: UsageSnapshot(
+                    fiveHour: UsagePeriod(utilization: 0, resetsAt: Date(timeIntervalSince1970: 3_600)),
+                    sevenDay: UsagePeriod(utilization: 49, resetsAt: Date(timeIntervalSince1970: 7_200)),
+                    fable: nil,
+                    lastUpdated: Date(timeIntervalSince1970: 0)
+                )
+            ]
+        )
+    }
+
+    func testReportRevealsNoSecrets() {
+        let report = ClaudeUsageDiagnostics.report(for: input(), now: Date(timeIntervalSince1970: 600))
+
+        for secret in [organizationID, "fingerprint-a", "fingerprint-b", "session-secret-a", "session-secret-b"] {
+            XCTAssertFalse(report.contains(secret), "diagnostics leaked \(secret)")
+        }
+    }
+
+    func testReportGroupsSharedAndDistinctValues() {
+        let report = ClaudeUsageDiagnostics.report(for: input(), now: Date(timeIntervalSince1970: 600))
+
+        XCTAssertTrue(report.contains("accounts: 2"))
+        XCTAssertTrue(report.contains("stored web sessions: 2"))
+        // One shared organization, two separate logins and sessions.
+        XCTAssertTrue(report.contains("distinct organizations: 1"))
+        XCTAssertTrue(report.contains("distinct identities: 2"))
+        XCTAssertTrue(report.contains("distinct sessions: 2"))
+        XCTAssertEqual(report.components(separatedBy: "organization group: A").count - 1, 2)
+        XCTAssertTrue(report.contains("identity group: A"))
+        XCTAssertTrue(report.contains("identity group: B"))
+    }
+
+    func testReportShowsUsageAndMissingFetches() {
+        let report = ClaudeUsageDiagnostics.report(for: input(), now: Date(timeIntervalSince1970: 600))
+
+        XCTAssertTrue(report.contains("5h 0%"))
+        XCTAssertTrue(report.contains("weekly 49%"))
+        XCTAssertTrue(report.contains("never fetched"))
+    }
+
+    func testReportWarnsWhenTwoProfilesShareOneSession() {
+        let first = ClaudeAccount(name: "First", webOrganizationID: "org", webAccountFingerprint: "a")
+        let second = ClaudeAccount(name: "Second", webOrganizationID: "org", webAccountFingerprint: "b")
+        let shared = ClaudeUsageDiagnostics.Input(
+            accounts: [first, second],
+            sessionKeys: [first.id: "same-session", second.id: "same-session"],
+            snapshots: [:]
+        )
+
+        let report = ClaudeUsageDiagnostics.report(for: shared, now: Date(timeIntervalSince1970: 0))
+
+        XCTAssertTrue(report.contains("distinct sessions: 1"))
+        XCTAssertTrue(report.contains("warning: two profiles hold the same Claude.ai session"))
+    }
 }
 
 final class WebSessionFileStoreTests: XCTestCase {
