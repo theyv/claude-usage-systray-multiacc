@@ -4,6 +4,7 @@
 *.xcodeproj/project.xcworkspace/xcuserdata/
 DerivedData/
 build/
+default.profraw
 *.ipa
 *.dSYM.zip
 *.dSYM
