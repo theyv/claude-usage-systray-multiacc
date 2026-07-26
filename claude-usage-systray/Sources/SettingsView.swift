@@ -121,6 +121,7 @@ private struct ClaudeWebLoginView: View {
                     Text(login.status).font(.caption).foregroundColor(.secondary)
                 }
                 Spacer()
+                Button("Use current session") { login.captureCurrentSession() }
                 Button("Cancel") { dismiss() }
             }
             .padding()
@@ -207,9 +208,23 @@ private final class ClaudeWebLogin: NSObject, ObservableObject, WKNavigationDele
 
     func cookiesDidChange(in cookieStore: WKHTTPCookieStore) {
         guard stage == .signingIn else { return }
+        captureCurrentSession(showError: false)
+    }
+
+    func captureCurrentSession(showError: Bool = true) {
+        guard stage == .signingIn else { return }
+        let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
         cookieStore.getAllCookies { cookies in
             guard self.stage == .signingIn,
-                  let sessionKey = cookies.first(where: { $0.name == "sessionKey" && $0.domain.contains("claude.ai") })?.value else { return }
+                  let sessionKey = cookies.first(where: {
+                      $0.name == "sessionKey" && $0.domain.contains("claude.ai")
+                  })?.value else {
+                if showError {
+                    self.error = "No Claude.ai session cookie found yet. Finish signing in, then try again."
+                }
+                return
+            }
+            self.error = nil
             self.capturedSessionKey = sessionKey
             self.stage = .findingOrganization
             self.status = "Login complete. Finding your Claude organization…"
@@ -218,6 +233,10 @@ private final class ClaudeWebLogin: NSObject, ObservableObject, WKNavigationDele
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if stage == .signingIn {
+            captureCurrentSession(showError: false)
+            return
+        }
         guard stage == .findingOrganization else { return }
         webView.evaluateJavaScript("document.body.innerText || document.body.textContent") { result, evaluationError in
             if let evaluationError {
