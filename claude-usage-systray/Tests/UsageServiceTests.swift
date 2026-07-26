@@ -123,6 +123,40 @@ final class OAuthUsageResponseTests: XCTestCase {
     }
 }
 
+// MARK: - Claude organizations response parsing
+
+final class ClaudeOrganizationsResponseParserTests: XCTestCase {
+
+    func testParsesOrganizationsArray() {
+        let json = #"[{"uuid":"org-array","name":"Example"}]"#
+        XCTAssertEqual(
+            ClaudeOrganizationsResponseParser.firstOrganizationID(from: json),
+            "org-array"
+        )
+    }
+
+    func testParsesWrappedOrganizationsArray() {
+        let json = #"{"organizations":[{"id":"org-wrapped"}]}"#
+        XCTAssertEqual(
+            ClaudeOrganizationsResponseParser.firstOrganizationID(from: json),
+            "org-wrapped"
+        )
+    }
+
+    func testParsesSingleOrganizationObject() {
+        let json = #"{"uuid":"org-single"}"#
+        XCTAssertEqual(
+            ClaudeOrganizationsResponseParser.firstOrganizationID(from: json),
+            "org-single"
+        )
+    }
+
+    func testRejectsEmptyOrInvalidResponses() {
+        XCTAssertNil(ClaudeOrganizationsResponseParser.firstOrganizationID(from: "[]"))
+        XCTAssertNil(ClaudeOrganizationsResponseParser.firstOrganizationID(from: "<html></html>"))
+    }
+}
+
 // MARK: - calculateUtilization
 
 final class CalculateUtilizationTests: XCTestCase {

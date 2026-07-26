@@ -16,6 +16,9 @@ build/
 # Claude Code local settings
 .claude/settings.local.json
 
+# Local browser automation artifacts
+.playwright-mcp/
+
 # Release artifacts
 *.zip
 *.p12

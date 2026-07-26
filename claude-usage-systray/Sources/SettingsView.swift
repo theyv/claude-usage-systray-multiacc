@@ -105,6 +105,45 @@ private struct ClaudeWebCredential: Equatable {
     let organizationID: String
 }
 
+enum ClaudeOrganizationsResponseParser {
+    static func firstOrganizationID(from text: String) -> String? {
+        guard let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) else {
+            return nil
+        }
+
+        if let organizations = object as? [[String: Any]] {
+            return organizations.lazy.compactMap { identifier(in: $0) }.first
+        }
+
+        guard let dictionary = object as? [String: Any] else { return nil }
+        if let identifier = identifier(in: dictionary) {
+            return identifier
+        }
+
+        for key in ["organizations", "data"] {
+            if let organizations = dictionary[key] as? [[String: Any]],
+               let identifier = organizations.lazy.compactMap({ identifier(in: $0) }).first {
+                return identifier
+            }
+        }
+
+        if let organization = dictionary["organization"] as? [String: Any] {
+            return identifier(in: organization)
+        }
+        return nil
+    }
+
+    private static func identifier(in organization: [String: Any]) -> String? {
+        for key in ["uuid", "id"] {
+            if let value = organization[key] as? String, !value.isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+}
+
 private struct ClaudeWebLoginView: View {
     let account: ClaudeAccount
     @ObservedObject var settingsManager: SettingsManager
@@ -169,6 +208,8 @@ private final class ClaudeWebLogin: NSObject, ObservableObject, WKNavigationDele
     private enum Stage { case idle, signingIn, findingOrganization, complete }
     private var stage = Stage.idle
     private var capturedSessionKey: String?
+    private var organizationLookupTask: Task<Void, Never>?
+    private let organizationLookupDelays: [UInt64] = [1, 2, 4, 8, 12, 15]
 
     lazy var webView: WKWebView = {
         let configuration = WKWebViewConfiguration()
@@ -202,6 +243,9 @@ private final class ClaudeWebLogin: NSObject, ObservableObject, WKNavigationDele
     }
 
     func cancel() {
+        stage = .idle
+        organizationLookupTask?.cancel()
+        organizationLookupTask = nil
         webView.configuration.websiteDataStore.httpCookieStore.remove(self)
         webView.stopLoading()
     }
@@ -212,6 +256,11 @@ private final class ClaudeWebLogin: NSObject, ObservableObject, WKNavigationDele
     }
 
     func captureCurrentSession(showError: Bool = true) {
+        if stage == .findingOrganization, capturedSessionKey != nil {
+            error = nil
+            scheduleOrganizationLookup(attempt: 0)
+            return
+        }
         guard stage == .signingIn else { return }
         let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
         cookieStore.getAllCookies { cookies in
@@ -228,34 +277,13 @@ private final class ClaudeWebLogin: NSObject, ObservableObject, WKNavigationDele
             self.capturedSessionKey = sessionKey
             self.stage = .findingOrganization
             self.status = "Login complete. Finding your Claude organization…"
-            self.webView.load(URLRequest(url: URL(string: "https://claude.ai/api/organizations")!))
+            self.scheduleOrganizationLookup(attempt: 0)
         }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if stage == .signingIn {
             captureCurrentSession(showError: false)
-            return
-        }
-        guard stage == .findingOrganization else { return }
-        webView.evaluateJavaScript("document.body.innerText || document.body.textContent") { result, evaluationError in
-            if let evaluationError {
-                self.fail(evaluationError.localizedDescription)
-                return
-            }
-            guard let sessionKey = self.capturedSessionKey,
-                  let text = result as? String,
-                  let data = text.data(using: .utf8),
-                  let organizations = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-                  let organization = organizations.first,
-                  let organizationID = (organization["uuid"] ?? organization["id"]) as? String else {
-                self.fail("Login succeeded, but no Claude organization was found.")
-                return
-            }
-            self.stage = .complete
-            self.status = "Connected."
-            self.webView.configuration.websiteDataStore.httpCookieStore.remove(self)
-            self.credential = ClaudeWebCredential(sessionKey: sessionKey, organizationID: organizationID)
         }
     }
 
@@ -266,6 +294,81 @@ private final class ClaudeWebLogin: NSObject, ObservableObject, WKNavigationDele
     private func fail(_ message: String) {
         error = message
         status = "Could not connect this account."
+    }
+
+    private func scheduleOrganizationLookup(attempt: Int) {
+        guard stage == .findingOrganization,
+              organizationLookupDelays.indices.contains(attempt) else { return }
+
+        organizationLookupTask?.cancel()
+        let delay = organizationLookupDelays[attempt]
+        status = attempt == 0
+            ? "Login complete. Finding your Claude organization…"
+            : "Claude is still preparing the account. Retrying automatically…"
+
+        organizationLookupTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.sleep(nanoseconds: delay * 1_000_000_000)
+                try Task.checkCancellation()
+                guard self.stage == .findingOrganization else { return }
+
+                let result = try await self.webView.callAsyncJavaScript(
+                    """
+                    const response = await fetch("https://claude.ai/api/organizations", {
+                        credentials: "include",
+                        headers: { "Accept": "application/json" }
+                    });
+                    return JSON.stringify({
+                        status: response.status,
+                        body: await response.text()
+                    });
+                    """,
+                    arguments: [:],
+                    in: nil,
+                    contentWorld: .page
+                )
+                try Task.checkCancellation()
+                self.handleOrganizationLookupResult(result, attempt: attempt)
+            } catch is CancellationError {
+                return
+            } catch {
+                self.retryOrganizationLookup(after: attempt)
+            }
+        }
+    }
+
+    private func handleOrganizationLookupResult(_ result: Any?, attempt: Int) {
+        guard stage == .findingOrganization,
+              let payload = result as? String,
+              let payloadData = payload.data(using: .utf8),
+              let envelope = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
+              let statusCode = (envelope["status"] as? NSNumber)?.intValue,
+              statusCode == 200,
+              let body = envelope["body"] as? String,
+              let organizationID = ClaudeOrganizationsResponseParser.firstOrganizationID(from: body),
+              let sessionKey = capturedSessionKey else {
+            retryOrganizationLookup(after: attempt)
+            return
+        }
+
+        stage = .complete
+        status = "Connected."
+        organizationLookupTask = nil
+        webView.configuration.websiteDataStore.httpCookieStore.remove(self)
+        credential = ClaudeWebCredential(sessionKey: sessionKey, organizationID: organizationID)
+    }
+
+    private func retryOrganizationLookup(after attempt: Int) {
+        let nextAttempt = attempt + 1
+        if organizationLookupDelays.indices.contains(nextAttempt) {
+            scheduleOrganizationLookup(attempt: nextAttempt)
+            return
+        }
+
+        organizationLookupTask = nil
+        status = "Signed in, but Claude has not exposed the account yet."
+        error = "Keep this window open and click “Use current session” to retry."
     }
 }
 
